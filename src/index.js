@@ -1,9 +1,4 @@
 import express from 'express'
-import medicineRouter from './routes/medicine.js'
-import billingRouter from './routes/bills.js'
-import purchaseRouter from './routes/purchase.js'
-import paymentRouter from './routes/payments.js'
-import expiryRouter from './routes/expiry.js'
 import supplierRoutes from './routes/supplierRouter.js'
 import billRouterSql from './routes/billRouter.js'
 import paymentRouterSql from './routes/paymentRouter.js'
@@ -27,9 +22,6 @@ app.use(express.json())
 
 //routes
 
-app.use('/api/medicines',medicineRouter)
-app.use('/api/bills',billingRouter)
-app.use('/api/expiry',expiryRouter)
 app.use('/api/supplier',supplierRoutes)
 app.use('/api/sqlbills', billRouterSql);
 app.use('/api/sqlpayment', paymentRouterSql);
