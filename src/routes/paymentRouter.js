@@ -1,5 +1,5 @@
 import express from 'express';
-import { addPayment,fetchAllPayments,fetchPaymentsByDate } from '../controllers/paymentControllerSql.js';
+import { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment } from '../controllers/paymentControllerSql.js';
 
 const router = express.Router();
 
@@ -31,6 +31,17 @@ router.get('/payments/date/:date', (req, res) => {
   } catch (error) {
     console.error('Error fetching payments by date:', error);
     res.status(500).json({ error: 'Failed to fetch payments by date' });
+  }
+});
+
+router.delete('/payments/:id', (req, res) => {
+  try {
+    const paymentId = req.params.id; // Get the payment ID from the route parameter
+    const result = deletePayment(paymentId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error deleting payment:', error);
+    res.status(500).json({ error: 'Failed to delete payment' });
   }
 });
 
