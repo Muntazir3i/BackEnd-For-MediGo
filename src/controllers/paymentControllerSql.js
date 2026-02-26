@@ -36,5 +36,14 @@ function fetchPaymentsByDate(date) {
   return query.all(date); // Fetches payments where the date matches
 }
 
+function deletePayment(paymentId) {
+  const del = db.prepare(`
+    DELETE FROM payments WHERE id = ?
+  `);
 
-export { addPayment,fetchAllPayments,fetchPaymentsByDate };
+  del.run(paymentId);
+  return { message: 'Payment deleted', paymentId };
+}
+
+
+export { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment };
