@@ -1,5 +1,5 @@
 import express from 'express';
-import { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment } from '../controllers/paymentControllerSql.js';
+import { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment, updatePayment } from '../controllers/paymentControllerSql.js';
 
 const router = express.Router();
 
@@ -42,6 +42,18 @@ router.delete('/payments/:id', (req, res) => {
   } catch (error) {
     console.error('Error deleting payment:', error);
     res.status(500).json({ error: 'Failed to delete payment' });
+  }
+});
+
+router.put('/payments/:id', (req, res) => {
+  try {
+    const paymentId = req.params.id; // Get the payment ID from the route parameter
+    const updatedPayment = req.body; // Get the updated payment data from the request body
+    const result = updatePayment({ ...updatedPayment, id: paymentId });
+    res.json(result);
+  } catch (error) {
+    console.error('Error updating payment:', error);
+    res.status(500).json({ error: 'Failed to update payment' });
   }
 });
 

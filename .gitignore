@@ -5,3 +5,5 @@ node_modules/
 .vscode/
 
 src/data/
+billsNpayment.db
+supplier.db

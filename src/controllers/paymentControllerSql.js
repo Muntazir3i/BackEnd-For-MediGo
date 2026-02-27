@@ -45,5 +45,25 @@ function deletePayment(paymentId) {
   return { message: 'Payment deleted', paymentId };
 }
 
+function updatePayment(payment) {
+  const update = db.prepare(`
+    UPDATE payments
+    SET date = ?, invoice = ?, supplierName = ?, drugLicenseNumber = ?, total = ?, type = ?
+    WHERE id = ?
+  `);
 
-export { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment };
+  update.run(
+    payment.date,
+    payment.invoice,
+    payment.supplierName,
+    payment.drugLicenseNumber,
+    payment.total,
+    payment.type,
+    payment.id
+  );
+
+  return { message: 'Payment updated', paymentId: payment.id };
+}
+
+
+export { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment, updatePayment };
