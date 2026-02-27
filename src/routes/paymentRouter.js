@@ -49,7 +49,7 @@ router.put('/payments/:id', (req, res) => {
   try {
     const paymentId = req.params.id; // Get the payment ID from the route parameter
     const updatedPayment = req.body; // Get the updated payment data from the request body
-    const result = updatePayment({ ...updatedPayment, id: paymentId });
+    const result = updatePayment({ ...updatedPayment, id: paymentId }); // Ensure the ID is included in the updated payment object
     res.json(result);
   } catch (error) {
     console.error('Error updating payment:', error);
