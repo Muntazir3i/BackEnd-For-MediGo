@@ -22,6 +22,8 @@ function addPayment(payment) {
 function fetchAllPayments() {
   const query = db.prepare(`
     SELECT * FROM payments
+    ORDER BY id DESC
+    LIMIT 50
   `);
 
   return query.all(); // Fetches all rows from the payments table
