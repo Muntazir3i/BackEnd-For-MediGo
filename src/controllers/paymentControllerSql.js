@@ -19,6 +19,14 @@ function addPayment(payment) {
   return { message: 'Payment recorded', paymentId: payment.id };
 }
 
+function findPaymentByInvoice(invoice) {
+  const query = db.prepare(`
+    SELECT * FROM payments WHERE invoice = ?
+  `);
+
+  return query.get(invoice); // Fetches a single payment where the invoice matches
+}
+
 function fetchAllPayments() {
   const query = db.prepare(`
     SELECT * FROM payments
@@ -68,4 +76,4 @@ function updatePayment(payment) {
 }
 
 
-export { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment, updatePayment };
+export { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice };
