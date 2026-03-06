@@ -1,17 +1,31 @@
 import express from 'express';
-import { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice } from '../controllers/paymentControllerSql.js';
+import { addPayment, fetchAllPayments, fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice, findPaymentByInvoice } from '../controllers/paymentControllerSql.js';
 
 const router = express.Router();
 
-router.post('/payments', (req, res) => {
+// router.post('/payments', (req, res) => {
+//   try {
+//     const result = addPayment(req.body);
+//     res.json(result);
+//   } catch (error) {
+//     console.error('Error saving payment:', error);
+//     res.status(500).json({ error: 'Failed to save payment' });
+//   }
+// });
+
+router.post('/payments', async (req, res) => {
   try {
-    const result = addPayment(req.body);
+    const payment = await findPaymentByInvoice(req.body.invoice);
+    if (payment) {
+      return res.status(400).json({ error: 'Payment already exists' });
+    }
+    const result = await addPayment(req.body);
     res.json(result);
   } catch (error) {
     console.error('Error saving payment:', error);
     res.status(500).json({ error: 'Failed to save payment' });
   }
-});
+})
 
 router.get('/payments', (req, res) => {
   try {
