@@ -1,5 +1,5 @@
 import express from 'express';
-import { addPayment, fetchAllPayments, fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice, findPaymentByInvoice } from '../controllers/paymentControllerSql.js';
+import { addPayment, fetchAllPayments, fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice,} from '../controllers/paymentControllerSql.js';
 
 const router = express.Router();
 
