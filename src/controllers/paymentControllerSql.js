@@ -1,79 +1,92 @@
 import db from '../db/billPayment.js';
 
-function addPayment(payment) {
-  const insert = db.prepare(`
-    INSERT INTO payments (id, date, invoice, supplierName, drugLicenseNumber, total,type)
-    VALUES (?, ?, ?, ?, ?, ?,?)
-  `);
+// 1. Pre-compile statements for better performance
+// This avoids parsing the SQL string on every function call.
+const statements = {
+  addPayment: db.prepare(`
+    INSERT INTO payments (id, date, invoice, supplierName, drugLicenseNumber, total, type)
+    VALUES (@id, @date, @invoice, @supplierName, @drugLicenseNumber, @total, @type)
+  `),
+  findPaymentByInvoice: db.prepare(`
+    SELECT * FROM payments WHERE invoice = ?
+  `),
+  fetchAllPayments: db.prepare(`
+    SELECT * FROM payments
+    ORDER BY id DESC
+    LIMIT 50
+  `),
+  fetchPaymentsByDate: db.prepare(`
+    SELECT * FROM payments WHERE date = ?
+  `),
+  deletePayment: db.prepare(`
+    DELETE FROM payments WHERE id = ?
+  `),
+  updatePayment: db.prepare(`
+    UPDATE payments
+    SET date = @date, invoice = @invoice, supplierName = @supplierName, drugLicenseNumber = @drugLicenseNumber, total = @total, type = @type
+    WHERE id = @id
+  `)
+};
 
-  insert.run(
-    payment.id,
-    payment.date,
-    payment.invoice,
-    payment.supplierName,
-    payment.drugLicenseNumber,
-    payment.total,
-    payment.type,
-  );
+function addPayment(payment) {
+  // 2. Use named parameters with fallbacks to avoid crashes if keys are missing/undefined
+  statements.addPayment.run({
+    id: payment.id,
+    date: payment.date || null,
+    invoice: payment.invoice || null,
+    supplierName: payment.supplierName || null,
+    drugLicenseNumber: payment.drugLicenseNumber || null,
+    total: payment.total || 0,
+    type: payment.type || null
+  });
 
   return { message: 'Payment recorded', paymentId: payment.id };
 }
 
 function findPaymentByInvoice(invoice) {
-  const query = db.prepare(`
-    SELECT * FROM payments WHERE invoice = ?
-  `);
-
-  return query.get(invoice); // Fetches a single payment where the invoice matches
+  return statements.findPaymentByInvoice.get(invoice);
 }
 
 function fetchAllPayments() {
-  const query = db.prepare(`
-    SELECT * FROM payments
-    ORDER BY id DESC
-    LIMIT 50
-  `);
-
-  return query.all(); // Fetches all rows from the payments table
+  return statements.fetchAllPayments.all();
 }
 
-// Function to fetch payments by date
 function fetchPaymentsByDate(date) {
-  const query = db.prepare(`
-    SELECT * FROM payments WHERE date = ?
-  `);
-
-  return query.all(date); // Fetches payments where the date matches
+  return statements.fetchPaymentsByDate.all(date);
 }
 
 function deletePayment(paymentId) {
-  const del = db.prepare(`
-    DELETE FROM payments WHERE id = ?
-  `);
-
-  del.run(paymentId);
-  return { message: 'Payment deleted', paymentId };
+  const info = statements.deletePayment.run(paymentId);
+  return {
+    message: info.changes > 0 ? 'Payment deleted' : 'Payment not found',
+    paymentId,
+    deleted: info.changes > 0
+  };
 }
 
 function updatePayment(payment) {
-  const update = db.prepare(`
-    UPDATE payments
-    SET date = ?, invoice = ?, supplierName = ?, drugLicenseNumber = ?, total = ?, type = ?
-    WHERE id = ?
-  `);
+  const info = statements.updatePayment.run({
+    id: payment.id,
+    date: payment.date || null,
+    invoice: payment.invoice || null,
+    supplierName: payment.supplierName || null,
+    drugLicenseNumber: payment.drugLicenseNumber || null,
+    total: payment.total || 0,
+    type: payment.type || null
+  });
 
-  update.run(
-    payment.date,
-    payment.invoice,
-    payment.supplierName,
-    payment.drugLicenseNumber,
-    payment.total,
-    payment.type,
-    payment.id
-  );
-
-  return { message: 'Payment updated', paymentId: payment.id };
+  return {
+    message: info.changes > 0 ? 'Payment updated' : 'Payment not found',
+    paymentId: payment.id,
+    updated: info.changes > 0
+  };
 }
 
-
-export { addPayment,fetchAllPayments,fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice };
+export {
+  addPayment,
+  fetchAllPayments,
+  fetchPaymentsByDate,
+  deletePayment,
+  updatePayment,
+  findPaymentByInvoice
+};
