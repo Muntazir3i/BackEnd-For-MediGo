@@ -1,31 +1,28 @@
 import express from 'express';
-import { addPayment, fetchAllPayments, fetchPaymentsByDate, deletePayment, updatePayment, findPaymentByInvoice,} from '../controllers/paymentControllerSql.js';
+import {
+  addPayment,
+  fetchAllPayments,
+  fetchPaymentsByDate,
+  deletePayment,
+  updatePayment,
+  findPaymentByInvoice,
+} from '../controllers/paymentControllerSql.js';
 
 const router = express.Router();
 
-// router.post('/payments', (req, res) => {
-//   try {
-//     const result = addPayment(req.body);
-//     res.json(result);
-//   } catch (error) {
-//     console.error('Error saving payment:', error);
-//     res.status(500).json({ error: 'Failed to save payment' });
-//   }
-// });
-
-router.post('/payments', async (req, res) => {
+router.post('/payments', (req, res) => {
   try {
-    const payment = await findPaymentByInvoice(req.body.invoice);
+    const payment = findPaymentByInvoice(req.body.invoice);
     if (payment) {
       return res.status(400).json({ error: 'Payment already exists' });
     }
-    const result = await addPayment(req.body);
-    res.json(result);
+    const result = addPayment(req.body);
+    res.status(201).json(result);
   } catch (error) {
     console.error('Error saving payment:', error);
     res.status(500).json({ error: 'Failed to save payment' });
   }
-})
+});
 
 router.get('/payments', (req, res) => {
   try {
@@ -39,7 +36,7 @@ router.get('/payments', (req, res) => {
 
 router.get('/payments/date/:date', (req, res) => {
   try {
-    const date = req.params.date; // Get the date from the route parameter
+    const date = req.params.date;
     const payments = fetchPaymentsByDate(date);
     res.json(payments);
   } catch (error) {
@@ -50,8 +47,13 @@ router.get('/payments/date/:date', (req, res) => {
 
 router.delete('/payments/:id', (req, res) => {
   try {
-    const paymentId = req.params.id; // Get the payment ID from the route parameter
+    const paymentId = req.params.id;
     const result = deletePayment(paymentId);
+
+    // Using the flag from the updated controller
+    if (!result.deleted) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
     res.json(result);
   } catch (error) {
     console.error('Error deleting payment:', error);
@@ -61,9 +63,15 @@ router.delete('/payments/:id', (req, res) => {
 
 router.put('/payments/:id', (req, res) => {
   try {
-    const paymentId = req.params.id; // Get the payment ID from the route parameter
-    const updatedPayment = req.body; // Get the updated payment data from the request body
-    const result = updatePayment({ ...updatedPayment, id: paymentId }); // Ensure the ID is included in the updated payment object
+    const paymentId = req.params.id;
+    const updatedPayment = req.body;
+
+    const result = updatePayment({ ...updatedPayment, id: paymentId });
+
+    // Using the flag from the updated controller
+    if (!result.updated) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
     res.json(result);
   } catch (error) {
     console.error('Error updating payment:', error);
