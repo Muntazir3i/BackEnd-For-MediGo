@@ -1,19 +1,30 @@
 import db from "../db/db.js";
 
-export function addSupplier({ supplierName, phoneNumber, drugLn, supplierBalance }) {
-  const stmt = db.prepare(`
+// 1. Pre-compile statements for better performance
+// This avoids parsing the SQL string on every function call.
+const statements = {
+  addSupplier: db.prepare(`
     INSERT INTO suppliers (supplierName, phoneNumber, drugLn, supplierBalance)
-    VALUES (?, ?, ?, ?)
-  `);
-  const info = stmt.run(supplierName, phoneNumber, drugLn, supplierBalance);
+    VALUES (@supplierName, @phoneNumber, @drugLn, @supplierBalance)
+  `),
+  getAllSuppliers: db.prepare(`
+    SELECT * FROM suppliers
+  `)
+};
+
+export function addSupplier({ supplierName, phoneNumber, drugLn, supplierBalance }) {
+  // 2. Use named parameters with fallbacks to avoid crashes
+  const info = statements.addSupplier.run({
+    supplierName: supplierName || null,
+    phoneNumber: phoneNumber || null,
+    drugLn: drugLn || null,
+    supplierBalance: supplierBalance || 0
+  });
+
   return info.lastInsertRowid;
 }
 
 // Function to fetch all suppliers
 export function getAllSuppliers() {
-    const stmt = db.prepare('SELECT * FROM suppliers');
-    return stmt.all(); // Returns all rows from the suppliers table
-  }
-
-
-//This code defines a function named addSupplier that is responsible for adding a new supplier to the suppliers table in a SQLite database.
+  return statements.getAllSuppliers.all();
+}

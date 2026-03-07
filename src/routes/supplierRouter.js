@@ -15,8 +15,8 @@ router.post('/suppliers', (req, res) => {
     const id = addSupplier({ supplierName, phoneNumber, drugLn, supplierBalance });
     res.status(201).json({ message: 'Supplier added', supplierId: id });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error saving supplier:', error);
+    res.status(500).json({ error: 'Failed to save supplier' });
   }
 });
 
@@ -24,10 +24,10 @@ router.post('/suppliers', (req, res) => {
 router.get('/suppliers', (req, res) => {
   try {
     const suppliers = getAllSuppliers();
-    res.status(200).json(suppliers);
+    res.json(suppliers);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    console.error('Error fetching suppliers:', error);
+    res.status(500).json({ error: 'Failed to fetch suppliers' });
   }
 });
 
