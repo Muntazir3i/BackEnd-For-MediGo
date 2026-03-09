@@ -1,3 +1,9 @@
+/**
+ * Controller for handling medicine search operations using SQLite.
+ * 
+ * Provides functionality to search for medicines by name with wildcard matching,
+ * limiting the results to the top matches.
+ */
 import db from "../db/billPayment.js";
 
 // 1. Pre-compile statements for better performance

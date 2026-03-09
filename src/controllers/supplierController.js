@@ -1,3 +1,9 @@
+/**
+ * Controller for managing supplier-related database operations using SQLite.
+ * 
+ * Provides functionality to add new suppliers and fetch all existing suppliers
+ * from the database.
+ */
 import db from "../db/db.js";
 
 // 1. Pre-compile statements for better performance

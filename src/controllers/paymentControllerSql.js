@@ -1,3 +1,10 @@
+/**
+ * Controller for managing payment-related database operations using SQLite.
+ * 
+ * This controller handles CRUD operations for payments, including adding new
+ * payments, fetching payments by various criteria (invoice, date), updating
+ * existing payments, and deleting payments.
+ */
 import db from '../db/billPayment.js';
 
 // 1. Pre-compile statements for better performance

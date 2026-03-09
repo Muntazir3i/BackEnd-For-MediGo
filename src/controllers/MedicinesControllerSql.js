@@ -1,3 +1,8 @@
+/**
+ * Controller for managing medicine-related database operations using SQLite.
+ * 
+ * Provides functionality to fetch all medicines (products) from the database.
+ */
 import db from "../db/billPayment.js";
 
 // 1. Pre-compile statements for better performance
