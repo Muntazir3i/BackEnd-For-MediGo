@@ -1,0 +1,18 @@
+version: "3.3"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: medigo-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secretpassword
+      POSTGRES_DB: medigo_erp
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
