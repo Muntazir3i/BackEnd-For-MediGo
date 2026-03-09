@@ -1,3 +1,12 @@
+/**
+ * Controller for managing bill-related database operations using SQLite.
+ * 
+ * This controller handles inserting new bills along with their associated
+ * products into the database within a transaction. It also provides 
+ * functionality to fetch all existing bills and seamlessly maps their 
+ * respective products to them.
+ */
+
 import db from '../db/billPayment.js';
 
 // 1. Pre-compile statements for better performance
