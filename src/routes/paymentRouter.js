@@ -6,6 +6,7 @@ import {
   deletePayment,
   updatePayment,
   findPaymentByInvoice,
+  loadMorePayments
 } from '../controllers/paymentControllerSql.js';
 
 const router = express.Router();
@@ -27,6 +28,17 @@ router.post('/payments', (req, res) => {
 router.get('/payments', (req, res) => {
   try {
     const payments = fetchAllPayments();
+    res.json(payments);
+  } catch (error) {
+    console.error('Error fetching payments:', error);
+    res.status(500).json({ error: 'Failed to fetch payments' });
+  }
+});
+
+router.get('/payments/loadMore/:lastId', (req, res) => {
+  try {
+    const lastId = req.params.lastId;
+    const payments = loadMorePayments(lastId);
     res.json(payments);
   } catch (error) {
     console.error('Error fetching payments:', error);

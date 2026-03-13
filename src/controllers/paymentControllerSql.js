@@ -32,6 +32,12 @@ const statements = {
     UPDATE payments
     SET date = @date, invoice = @invoice, supplierName = @supplierName, drugLicenseNumber = @drugLicenseNumber, total = @total, type = @type
     WHERE id = @id
+  `),
+  loadMorePayments: db.prepare(`
+    SELECT * FROM payments
+    WHERE id < ?
+    ORDER BY id DESC
+    LIMIT 50
   `)
 };
 
@@ -71,6 +77,10 @@ function deletePayment(paymentId) {
   };
 }
 
+function loadMorePayments(lastId) {
+  return statements.loadMorePayments.all(lastId);
+}
+
 function updatePayment(payment) {
   const info = statements.updatePayment.run({
     id: payment.id,
@@ -95,5 +105,6 @@ export {
   fetchPaymentsByDate,
   deletePayment,
   updatePayment,
-  findPaymentByInvoice
+  findPaymentByInvoice,
+  loadMorePayments
 };
