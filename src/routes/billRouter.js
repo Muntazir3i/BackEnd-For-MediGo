@@ -3,6 +3,7 @@ import { addBill, fetchBillsWithProducts } from '../controllers/billControllerSq
 
 const router = express.Router();
 
+// Route to create a new bill
 router.post('/bills', (req, res) => {
   try {
     const result = addBill(req.body);
@@ -13,6 +14,7 @@ router.post('/bills', (req, res) => {
   }
 });
 
+// Route to fetch all bills with their associated products
 router.get('/bills', (req, res) => {
   try {
     const bills = fetchBillsWithProducts();

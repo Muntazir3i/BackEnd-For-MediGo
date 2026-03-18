@@ -11,6 +11,7 @@ import {
 
 const router = express.Router();
 
+// Route to record a new payment
 router.post('/payments', (req, res) => {
   try {
     const payment = findPaymentByInvoice(req.body.invoice);
@@ -25,6 +26,7 @@ router.post('/payments', (req, res) => {
   }
 });
 
+// Route to fetch all payment records
 router.get('/payments', (req, res) => {
   try {
     const payments = fetchAllPayments();
@@ -35,6 +37,7 @@ router.get('/payments', (req, res) => {
   }
 });
 
+// Route to fetch paginated payment records after a specific ID
 router.get('/payments/loadMore/:lastId', (req, res) => {
   try {
     const lastId = req.params.lastId;
@@ -46,6 +49,7 @@ router.get('/payments/loadMore/:lastId', (req, res) => {
   }
 });
 
+// Route to fetch payment records filtered by a specific date
 router.get('/payments/date/:date', (req, res) => {
   try {
     const date = req.params.date;
@@ -57,6 +61,7 @@ router.get('/payments/date/:date', (req, res) => {
   }
 });
 
+// Route to delete a specific payment record by its ID
 router.delete('/payments/:id', (req, res) => {
   try {
     const paymentId = req.params.id;
@@ -73,6 +78,7 @@ router.delete('/payments/:id', (req, res) => {
   }
 });
 
+// Route to update an existing payment record
 router.put('/payments/:id', (req, res) => {
   try {
     const paymentId = req.params.id;

@@ -3,6 +3,7 @@ import { fetchSearchMed } from '../controllers/medNameSearch.js';
 
 const router = express.Router();
 
+// Route to search for medicines matching the provided name
 router.get('/medicines/search/:name', (req, res) => {
     try {
         const name = req.params.name;

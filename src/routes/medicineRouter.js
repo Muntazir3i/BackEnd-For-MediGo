@@ -3,6 +3,7 @@ import { fetchAllMedicines } from '../controllers/MedicinesControllerSql.js';
 
 const router = express.Router();
 
+// Route to fetch a list of all available medicines
 router.get('/medicines', (req, res) => {
   try {
     const medicines = fetchAllMedicines();
