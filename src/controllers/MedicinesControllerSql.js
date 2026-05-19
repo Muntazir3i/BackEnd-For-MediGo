@@ -10,6 +10,7 @@ import db from "../db/billPayment.js";
 const statements = {
   fetchAllMedicines: db.prepare(`
       SELECT * FROM bill_products
+      LIMIT 100
     `)
 };
 

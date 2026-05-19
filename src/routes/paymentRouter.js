@@ -14,10 +14,6 @@ const router = express.Router();
 // Route to record a new payment
 router.post('/payments', (req, res) => {
   try {
-    const payment = findPaymentByInvoice(req.body.invoice);
-    if (payment) {
-      return res.status(400).json({ error: 'Payment already exists' });
-    }
     const result = addPayment(req.body);
     res.status(201).json(result);
   } catch (error) {
