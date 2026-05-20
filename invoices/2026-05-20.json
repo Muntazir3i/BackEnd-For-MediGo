@@ -1,0 +1,187 @@
+[
+  {
+    "invoiceNumber": "INV-302568",
+    "customer": {
+      "name": "Jana",
+      "phone": "99064107073",
+      "address": "Batpora"
+    },
+    "medicines": [
+      {
+        "id": 1773310565086,
+        "name": "FAMTAC 40MG",
+        "qty": 1,
+        "mrp": 39.96,
+        "batchNumber": "0062",
+        "expiryDate": "2027-08-01"
+      },
+      {
+        "id": 1779179218363,
+        "name": "PANTOCID DSR",
+        "qty": 1,
+        "mrp": 252.19,
+        "batchNumber": "112A",
+        "expiryDate": "2027-09-01"
+      },
+      {
+        "id": 1774848256406,
+        "name": "LIBRAX ",
+        "qty": 1,
+        "mrp": 229.73,
+        "batchNumber": "LXC26006",
+        "expiryDate": "2028-01-01"
+      }
+    ],
+    "total": 521.88,
+    "status": "completed",
+    "date": "2026-05-20T06:15:35.286Z"
+  },
+  {
+    "invoiceNumber": "INV-896423",
+    "customer": {
+      "name": "Shahnawaz",
+      "phone": "8899080025",
+      "address": "Nawakadal"
+    },
+    "medicines": [
+      {
+        "id": 1779179225338,
+        "name": "PANTOCID 40MG",
+        "qty": 1,
+        "mrp": 195.94,
+        "batchNumber": "GTH0443A",
+        "expiryDate": "2029-01-01"
+      },
+      {
+        "id": 1779080793053,
+        "name": "RIFAGUT 400",
+        "qty": 1,
+        "mrp": 450,
+        "batchNumber": "GKG2218A",
+        "expiryDate": "2027-11-01"
+      },
+      {
+        "id": 1779080824930,
+        "name": "LOPAMIDE",
+        "qty": 1,
+        "mrp": 24.3,
+        "batchNumber": "M021",
+        "expiryDate": "2028-10-01"
+      },
+      {
+        "id": 1773812961298,
+        "name": "ORS LIQUID ALKEM ",
+        "qty": 5,
+        "mrp": 32.56,
+        "batchNumber": "AIA5041",
+        "expiryDate": "2026-09-01"
+      }
+    ],
+    "total": 833.04,
+    "status": "completed",
+    "date": "2026-05-20T06:58:00.319Z"
+  },
+  {
+    "invoiceNumber": "INV-264392",
+    "customer": {
+      "name": "Anwar Ali",
+      "phone": "9906662556",
+      "address": "Kargil"
+    },
+    "medicines": [
+      {
+        "id": 1778320035847,
+        "name": "EATMORE ",
+        "qty": 1,
+        "mrp": 145,
+        "batchNumber": "EM-036",
+        "expiryDate": "2028-11-01"
+      },
+      {
+        "id": 1777980854516,
+        "name": "RONERV LC",
+        "qty": 1,
+        "mrp": 142.3,
+        "batchNumber": "UL25L633",
+        "expiryDate": "2027-05-01"
+      },
+      {
+        "id": 1776856353705,
+        "name": "ZENTIL",
+        "qty": 1,
+        "mrp": 9.09,
+        "batchNumber": "A228",
+        "expiryDate": "2028-02-01"
+      },
+      {
+        "id": 1779179218363,
+        "name": "PANTOCID DSR",
+        "qty": 1,
+        "mrp": 252.19,
+        "batchNumber": "112A",
+        "expiryDate": "2027-09-01"
+      }
+    ],
+    "total": 548.5799999999999,
+    "status": "completed",
+    "date": "2026-05-20T07:01:31.042Z"
+  },
+  {
+    "invoiceNumber": "INV-648786",
+    "customer": {
+      "name": "Zahid",
+      "phone": "",
+      "address": ""
+    },
+    "medicines": [
+      {
+        "id": 1778159411332,
+        "name": "ADULT DIAPER 2PCS PANTS XL",
+        "qty": 1,
+        "mrp": 100,
+        "batchNumber": "1ST",
+        "expiryDate": "9999-09-09"
+      }
+    ],
+    "total": 100,
+    "status": "completed",
+    "date": "2026-05-20T07:05:38.672Z"
+  },
+  {
+    "invoiceNumber": "INV-937585",
+    "customer": {
+      "name": "isa Mohammad",
+      "phone": "7006195285",
+      "address": "Kargil"
+    },
+    "medicines": [
+      {
+        "id": 1776689437675,
+        "name": "TELLZY H",
+        "qty": 1,
+        "mrp": 303,
+        "batchNumber": "1326",
+        "expiryDate": "2027-10-01"
+      },
+      {
+        "id": 1778757468862,
+        "name": "CONCOR COR 2.5MG",
+        "qty": 1,
+        "mrp": 97.4,
+        "batchNumber": "M22AL26015",
+        "expiryDate": "2028-01-01"
+      },
+      {
+        "id": 1777980854516,
+        "name": "RONERV LC",
+        "qty": 1,
+        "mrp": 142.3,
+        "batchNumber": "UL25L633",
+        "expiryDate": "2027-05-01"
+      }
+    ],
+    "total": 542.7,
+    "status": "completed",
+    "date": "2026-05-20T07:10:25.121Z"
+  }
+]

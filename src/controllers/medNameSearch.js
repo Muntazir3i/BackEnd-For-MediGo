@@ -14,7 +14,7 @@ const statements = {
         FROM bill_products
         WHERE name LIKE @name
         ORDER BY id DESC
-        LIMIT 3;
+        LIMIT 2;
     `)
 };
 
