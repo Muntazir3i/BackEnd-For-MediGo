@@ -183,5 +183,105 @@
     "total": 542.7,
     "status": "completed",
     "date": "2026-05-20T07:10:25.121Z"
+  },
+  {
+    "invoiceNumber": "INV-849875",
+    "customer": {
+      "name": "Shakeel",
+      "phone": "",
+      "address": "Leh"
+    },
+    "medicines": [
+      {
+        "id": 1776687812138,
+        "name": "CIR PREMIUM ADULT DIAPER L",
+        "qty": 1,
+        "mrp": 514.69,
+        "batchNumber": "ADME003",
+        "expiryDate": "2027-06-01"
+      }
+    ],
+    "total": 514.69,
+    "status": "completed",
+    "date": "2026-05-20T08:35:02.431Z"
+  },
+  {
+    "invoiceNumber": "INV-191787",
+    "customer": {
+      "name": "Ab Raheem",
+      "phone": "",
+      "address": "Kargil"
+    },
+    "medicines": [
+      {
+        "id": 1779189727928,
+        "name": "CNAC ",
+        "qty": 1,
+        "mrp": 325,
+        "batchNumber": "AN002BEA",
+        "expiryDate": "2027-03-01"
+      }
+    ],
+    "total": 325,
+    "status": "completed",
+    "date": "2026-05-20T11:38:36.666Z"
+  },
+  {
+    "invoiceNumber": "INV-242157",
+    "customer": {
+      "name": "Aisha",
+      "phone": "",
+      "address": "Bandipora"
+    },
+    "medicines": [
+      {
+        "id": 1767075181192,
+        "name": "CALINTA KIT",
+        "qty": 1,
+        "mrp": 561.56,
+        "batchNumber": "K2502212",
+        "expiryDate": "2027-02-01"
+      }
+    ],
+    "total": 561.56,
+    "status": "completed",
+    "date": "2026-05-20T11:41:50.253Z"
+  },
+  {
+    "invoiceNumber": "INV-426490",
+    "customer": {
+      "name": "Irshad Iqbal",
+      "phone": "",
+      "address": "Bandipora"
+    },
+    "medicines": [
+      {
+        "id": 1778142728286,
+        "name": "CLARIBID 250",
+        "qty": 1,
+        "mrp": 257.02,
+        "batchNumber": "MBL0080",
+        "expiryDate": "2027-09-01"
+      },
+      {
+        "id": 1778235351902,
+        "name": "SOOTHEX GARGLE 100",
+        "qty": 1,
+        "mrp": 123.5,
+        "batchNumber": "GC02126",
+        "expiryDate": "2028-02-01"
+      },
+      {
+        "id": 1777523146873,
+        "name": "BILAZEST M",
+        "qty": 1,
+        "mrp": 216.85,
+        "batchNumber": "HTL0102",
+        "expiryDate": "2027-05-01"
+      }
+    ],
+    "total": 597.37,
+    "status": "completed",
+    "date": "2026-05-20T13:06:38.854Z"
   }
 ]

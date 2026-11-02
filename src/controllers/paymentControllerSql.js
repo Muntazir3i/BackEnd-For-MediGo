@@ -23,7 +23,15 @@ const statements = {
     LIMIT 50
   `),
   fetchPaymentsByDate: db.prepare(`
-    SELECT * FROM payments WHERE date = ?
+    SELECT id, date, invoice, supplierName, total, COALESCE(type, 'Payment') AS type
+    FROM payments
+    WHERE date >= @from AND date < @to
+    ORDER BY date ASC, id ASC
+  `),
+  summarizePaymentsByDate: db.prepare(`
+    SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total
+    FROM payments
+    WHERE date >= @from AND date < @to
   `),
   deletePayment: db.prepare(`
     DELETE FROM payments WHERE id = ?
@@ -40,6 +48,21 @@ const statements = {
     LIMIT 50
   `)
 };
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function normalizeDate(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return DATE_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+// Exclusive upper bound so payments stored with a time component are included.
+function nextDay(date) {
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + 1);
+  return parsed.toISOString().slice(0, 10);
+}
 
 function addPayment(payment) {
   // 2. Use named parameters with fallbacks to avoid crashes if keys are missing/undefined
@@ -65,7 +88,23 @@ function fetchAllPayments() {
 }
 
 function fetchPaymentsByDate(date) {
-  return statements.fetchPaymentsByDate.all(date);
+  const from = normalizeDate(date);
+
+  if (!from) {
+    return {
+      date: date || '',
+      payments: [],
+      summary: { count: 0, total: 0 }
+    };
+  }
+
+  const to = nextDay(from);
+
+  return {
+    date: from,
+    payments: statements.fetchPaymentsByDate.all({ from, to }),
+    summary: statements.summarizePaymentsByDate.get({ from, to })
+  };
 }
 
 function deletePayment(paymentId) {

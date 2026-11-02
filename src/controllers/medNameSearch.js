@@ -1,10 +1,12 @@
 /**
  * Controller for handling medicine search operations using SQLite.
- * 
- * Provides functionality to search for medicines by name with wildcard matching,
- * limiting the results to the top matches.
+ *
+ * Searches medicines by name or batch number using partial matching and
+ * limits the results so the inventory screen stays responsive.
  */
 import db from "../db/billPayment.js";
+
+const SEARCH_RESULT_LIMIT = 100;
 
 // 1. Pre-compile statements for better performance
 // This avoids parsing the SQL string on every function call.
@@ -12,16 +14,19 @@ const statements = {
     fetchSearchMed: db.prepare(`
         SELECT *
         FROM bill_products
-        WHERE name LIKE @name
+        WHERE name LIKE @term
+           OR batchNumber LIKE @term
         ORDER BY id DESC
-        LIMIT 2;
+        LIMIT ${SEARCH_RESULT_LIMIT}
     `)
 };
 
 export function fetchSearchMed(name) {
-    // 2. Use named parameters with a fallback and wildcard matching
-    // Fallback to empty string if name is undefined or null, though LIKE '%' would match all
-    // But since it's a search, returning matched strings is fine.
-    const searchTerm = name ? `${name}%` : '%';
-    return statements.fetchSearchMed.all({ name: searchTerm });
+    // 2. Use partial matching so both a medicine name and a batch number
+    // can be searched from the same input.
+    const searchTerm = name && name.trim() !== ''
+        ? `%${name.trim()}%`
+        : '%';
+
+    return statements.fetchSearchMed.all({ term: searchTerm });
 }

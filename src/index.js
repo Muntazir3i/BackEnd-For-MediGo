@@ -8,17 +8,23 @@ import searchMedicineRouterSql from './routes/searchMedicineRouter.js'
 import invoiceRoutes from "./routes/invoiceRoutes.js";
 import './setup/createSupplierTable.js'
 import './setup/createBillsPaymnetTable.js'
-
-
 import cors from 'cors'
+import billScanRouter from './routes/billScan.js';
+import 'dotenv/config';
+
 
 const app = express();
 const PORT = 8008;
 
 app.use(cors());
 
+
 //middleware to parse JSON request body
-app.use(express.json())
+app.use(express.json({ limit: '20mb' }));
+
+
+app.use(billScanRouter);
+
 
 
 //routes

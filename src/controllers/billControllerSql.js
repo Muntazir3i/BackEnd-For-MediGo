@@ -1,15 +1,18 @@
 /**
  * Controller for managing bill-related database operations using SQLite.
- * 
+ *
  * This controller handles inserting new bills along with their associated
- * products into the database within a transaction. It also provides 
- * functionality to fetch all existing bills and seamlessly maps their 
- * respective products to them.
+ * products into the database within a transaction. Bills are fetched in small
+ * pages (5 by default) so the inventory screen stays fast even when there are
+ * thousands of bills.
  */
 
 import db from '../db/billPayment.js';
 
+export const DEFAULT_BILL_PAGE_SIZE = 5;
+
 // 1. Pre-compile statements for better performance
+// This avoids parsing the SQL string on every function call.
 const statements = {
   insertBill: db.prepare(`
     INSERT INTO bills (id, invoice, date, supplierName, supplierDrugLn, supplierContact, totalAmount, totalGst, totalDiscount, total, type)
@@ -19,36 +22,44 @@ const statements = {
     INSERT INTO bill_products (id, billId, name, batchNumber, expiryDate, stock, unitPrice, mrp, discount, gstPercentage, supplier, category)
     VALUES (@id, @billId, @name, @batchNumber, @expiryDate, @stock, @unitPrice, @mrp, @discount, @gstPercentage, @supplier, @category)
   `),
-  fetchBillsWithProducts: db.prepare(`
-    SELECT 
-      b.id AS billId,
-      b.invoice,
-      b.date,
-      b.supplierName,
-      b.supplierDrugLn,
-      b.supplierContact,
-      b.totalAmount,
-      b.totalGst,
-      b.totalDiscount,
-      b.total,
-      b.type,
-      p.id AS productId,
-      p.name AS productName,
-      p.batchNumber,
-      p.expiryDate,
-      p.stock,
-      p.unitPrice,
-      p.mrp,
-      p.discount,
-      p.gstPercentage,
-      p.supplier AS productSupplier,
-      p.category AS productCategory
-    FROM 
-      bills b
-    LEFT JOIN 
-      bill_products p
-    ON 
-      b.id = p.billId
+  countBills: db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM bills
+    WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
+      AND (@supplier IS NULL OR supplierName = @supplier)
+      AND (@supplierSearch IS NULL OR supplierName LIKE @supplierSearch)
+      AND (@date IS NULL OR date LIKE @date)
+      AND (@invoice IS NULL OR invoice LIKE @invoice)
+  `),
+  pageBills: db.prepare(`
+    SELECT *
+    FROM bills
+    WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
+      AND (@supplier IS NULL OR supplierName = @supplier)
+      AND (@supplierSearch IS NULL OR supplierName LIKE @supplierSearch)
+      AND (@date IS NULL OR date LIKE @date)
+      AND (@invoice IS NULL OR invoice LIKE @invoice)
+    ORDER BY date DESC, id DESC
+    LIMIT @limit OFFSET @offset
+  `),
+  supplierSummaries: db.prepare(`
+    SELECT
+      supplierName,
+      MAX(supplierDrugLn) AS supplierDrugLn,
+      COUNT(*) AS billCount,
+      COALESCE(SUM(total), 0) AS total
+    FROM bills
+    WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
+      AND supplierName IS NOT NULL
+      AND (@search IS NULL OR supplierName LIKE @search)
+    GROUP BY supplierName
+    ORDER BY supplierName COLLATE NOCASE ASC
+  `),
+  productsForBill: db.prepare(`
+    SELECT *
+    FROM bill_products
+    WHERE billId = ?
+    ORDER BY id ASC
   `)
 };
 
@@ -93,53 +104,89 @@ function addBill(billData) {
   return { message: 'Bill saved successfully', billId: billData.id };
 }
 
-function fetchBillsWithProducts() {
-  const rows = statements.fetchBillsWithProducts.all();
+/**
+ * Fetch a page of bills (with their products) newest first.
+ *
+ * @param {Object} options
+ * @param {number} [options.limit=5]          Maximum bills to return.
+ * @param {number} [options.offset=0]         Number of bills to skip.
+ * @param {string} [options.supplierName]     Optional exact supplier name filter.
+ * @param {string} [options.supplierSearch]   Optional partial supplier name filter.
+ * @param {string} [options.date]             Optional bill date (YYYY-MM-DD).
+ * @param {string} [options.invoice]          Optional invoice/bill number filter.
+ * @returns {{
+ *   bills: Array<Object>,
+ *   total: number,
+ *   limit: number,
+ *   offset: number,
+ *   hasMore: boolean
+ * }}
+ */
+function fetchBillsWithProducts({
+  limit = DEFAULT_BILL_PAGE_SIZE,
+  offset = 0,
+  supplierName = '',
+  supplierSearch = '',
+  date = '',
+  invoice = ''
+} = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || DEFAULT_BILL_PAGE_SIZE, 1), 100);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const supplier = supplierName && supplierName.trim() !== ''
+    ? supplierName.trim()
+    : null;
+  const supplierLike = supplierSearch && supplierSearch.trim() !== ''
+    ? `%${supplierSearch.trim()}%`
+    : null;
+  // Use a prefix match so dates stored with a time component are included.
+  const dateFilter = date && date.trim() !== ''
+    ? `${date.trim()}%`
+    : null;
+  const invoiceFilter = invoice && invoice.trim() !== ''
+    ? `%${invoice.trim()}%`
+    : null;
 
-  // Group the results by billId
-  const bills = rows.reduce((acc, row) => {
-    const billId = row.billId;
+  const params = {
+    supplier,
+    supplierSearch: supplierLike,
+    date: dateFilter,
+    invoice: invoiceFilter
+  };
 
-    // Check if the billId already exists in the accumulator
-    if (!acc[billId]) {
-      acc[billId] = {
-        id: billId,
-        invoice: row.invoice,
-        date: row.date,
-        supplierName: row.supplierName,
-        supplierDrugLn: row.supplierDrugLn,
-        supplierContact: row.supplierContact,
-        totalAmount: row.totalAmount,
-        totalGst: row.totalGst,
-        totalDiscount: row.totalDiscount,
-        total: row.total,
-        type: row.type,
-        products: [] // Initialize an empty array for products
-      };
-    }
+  const { total } = statements.countBills.get(params);
+  const rows = statements.pageBills.all({
+    ...params,
+    limit: safeLimit,
+    offset: safeOffset
+  });
 
-    // If there's a product associated with the bill, push it to the products array
-    if (row.productId) {
-      acc[billId].products.push({
-        id: row.productId,
-        name: row.productName,
-        batchNumber: row.batchNumber,
-        expiryDate: row.expiryDate,
-        stock: row.stock,
-        unitPrice: row.unitPrice,
-        mrp: row.mrp,
-        discount: row.discount,
-        gstPercentage: row.gstPercentage,
-        supplier: row.productSupplier,
-        category: row.productCategory
-      });
-    }
+  const bills = rows.map((row) => ({
+    ...row,
+    products: statements.productsForBill.all(row.id)
+  }));
 
-    return acc;
-  }, {});
-
-  // Convert the object to an array of bills
-  return Object.values(bills);
+  return {
+    bills,
+    total,
+    limit: safeLimit,
+    offset: safeOffset,
+    hasMore: safeOffset + bills.length < total
+  };
 }
 
-export { addBill, fetchBillsWithProducts };
+/**
+ * Fetch the list of suppliers with their total bill count and amount.
+ * Returns every supplier by default; pass `search` to filter by name.
+ *
+ * @param {string} [search]
+ * @returns {Array<{supplierName: string, supplierDrugLn: string, billCount: number, total: number}>}
+ */
+function fetchSupplierSummaries(search = '') {
+  const term = search && search.trim() !== ''
+    ? `%${search.trim()}%`
+    : null;
+
+  return statements.supplierSummaries.all({ search: term });
+}
+
+export { addBill, fetchBillsWithProducts, fetchSupplierSummaries };
