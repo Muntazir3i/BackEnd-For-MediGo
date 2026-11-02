@@ -52,6 +52,8 @@ const statements = {
     WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
       AND supplierName IS NOT NULL
       AND (@search IS NULL OR supplierName LIKE @search)
+      AND (@date IS NULL OR date LIKE @date)
+      AND (@invoice IS NULL OR invoice LIKE @invoice)
     GROUP BY supplierName
     ORDER BY supplierName COLLATE NOCASE ASC
   `),
@@ -176,17 +178,29 @@ function fetchBillsWithProducts({
 
 /**
  * Fetch the list of suppliers with their total bill count and amount.
- * Returns every supplier by default; pass `search` to filter by name.
+ * Returns every supplier by default; pass filters to narrow the result.
  *
- * @param {string} [search]
+ * @param {string|Object} [filters]
+ * @param {string} [filters.search]   Partial supplier name.
+ * @param {string} [filters.date]     Bill date (YYYY-MM-DD).
+ * @param {string} [filters.invoice]  Partial invoice/bill number.
  * @returns {Array<{supplierName: string, supplierDrugLn: string, billCount: number, total: number}>}
  */
-function fetchSupplierSummaries(search = '') {
-  const term = search && search.trim() !== ''
-    ? `%${search.trim()}%`
+function fetchSupplierSummaries(filters = {}) {
+  // Backwards compatibility: previously this function accepted a plain search string.
+  const options = typeof filters === 'string' ? { search: filters } : (filters || {});
+
+  const search = options.search && options.search.trim() !== ''
+    ? `%${options.search.trim()}%`
+    : null;
+  const date = options.date && options.date.trim() !== ''
+    ? `${options.date.trim()}%`
+    : null;
+  const invoice = options.invoice && options.invoice.trim() !== ''
+    ? `%${options.invoice.trim()}%`
     : null;
 
-  return statements.supplierSummaries.all({ search: term });
+  return statements.supplierSummaries.all({ search, date, invoice });
 }
 
 export { addBill, fetchBillsWithProducts, fetchSupplierSummaries };

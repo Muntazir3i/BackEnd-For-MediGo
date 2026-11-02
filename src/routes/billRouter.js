@@ -15,10 +15,12 @@ router.post('/bills', (req, res) => {
 });
 
 // Route to fetch the supplier list with bill counts and totals.
-// Query param: search (optional supplier name filter)
+// Query params: search (optional supplier name filter), date (optional),
+// invoice (optional partial bill number filter).
 router.get('/bills/suppliers', (req, res) => {
   try {
-    const suppliers = fetchSupplierSummaries(req.query.search || '');
+    const { search, date, invoice } = req.query;
+    const suppliers = fetchSupplierSummaries({ search, date, invoice });
     res.json(suppliers);
   } catch (error) {
     console.error('Error fetching bill suppliers:', error);
