@@ -64,9 +64,35 @@ const statements = {
     ORDER BY id ASC
   `),
   getBill: db.prepare(`
-    SELECT id, invoice, supplierName, total
+    SELECT *
     FROM bills
     WHERE id = ?
+  `),
+  updateBill: db.prepare(`
+    UPDATE bills
+    SET invoice = @invoice,
+        date = @date,
+        supplierName = @supplierName,
+        supplierDrugLn = @supplierDrugLn,
+        supplierContact = @supplierContact,
+        totalAmount = @totalAmount,
+        totalGst = @totalGst,
+        totalDiscount = @totalDiscount,
+        total = @total
+    WHERE id = @id
+  `),
+  updateProduct: db.prepare(`
+    UPDATE bill_products
+    SET name = @name,
+        batchNumber = @batchNumber,
+        expiryDate = @expiryDate,
+        stock = @stock,
+        unitPrice = @unitPrice,
+        mrp = @mrp,
+        discount = @discount,
+        gstPercentage = @gstPercentage,
+        category = @category
+    WHERE id = @id AND billId = @billId
   `),
   deleteProductsForBill: db.prepare(`
     DELETE FROM bill_products
@@ -117,6 +143,162 @@ function addBill(billData) {
   transaction();
 
   return { message: 'Bill saved successfully', billId: billData.id };
+}
+
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function round2(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * Update a purchase bill and all of its medicine lines in one transaction.
+ * Totals are recalculated on the server from the edited medicine values so the
+ * stored bill always matches its products.
+ *
+ * @param {number|string} billId
+ * @param {Object} billData
+ * @returns {{updated: boolean, bill: Object|null, products: Array<Object>}}
+ */
+function updateBill(billId, billData = {}) {
+  const id = Number(billId);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error('Invalid bill id');
+  }
+
+  const invoice = typeof billData.invoice === 'string' ? billData.invoice.trim() : '';
+  const date = typeof billData.date === 'string' ? billData.date.trim() : '';
+
+  if (!invoice) {
+    throw new Error('Invoice number is required');
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('A valid bill date is required');
+  }
+
+  const products = Array.isArray(billData.products) ? billData.products : [];
+
+  const transaction = db.transaction(() => {
+    const existingBill = statements.getBill.get(id);
+
+    if (!existingBill) {
+      return { updated: false, bill: null, products: [] };
+    }
+
+    const existingProducts = statements.productsForBill.all(id);
+
+    // Only existing lines can be edited. Keeping the line count fixed prevents
+    // accidentally dropping medicine rows because of a malformed request.
+    if (products.length !== existingProducts.length) {
+      throw new Error('All medicine lines must be included when updating a bill');
+    }
+
+    const existingById = new Map(
+      existingProducts.map((product) => [Number(product.id), product])
+    );
+    const seen = new Set();
+
+    const normalizedProducts = products.map((product) => {
+      const productId = Number(product.id);
+
+      if (!existingById.has(productId)) {
+        throw new Error('One or more medicine lines do not belong to this bill');
+      }
+
+      if (seen.has(productId)) {
+        throw new Error('Duplicate medicine line in the update');
+      }
+
+      seen.add(productId);
+
+      const name = String(product.name ?? '').trim();
+      const stock = toNumber(product.stock);
+      const unitPrice = toNumber(product.unitPrice);
+      const mrp = toNumber(product.mrp);
+      const discount = toNumber(product.discount);
+      const gstPercentage = toNumber(product.gstPercentage);
+
+      if (!name) {
+        throw new Error('Every medicine line needs a name');
+      }
+
+      if (stock <= 0) {
+        throw new Error(`Quantity for ${name} must be greater than 0`);
+      }
+
+      if (unitPrice < 0 || mrp < 0 || discount < 0 || gstPercentage < 0) {
+        throw new Error(`Rate, MRP, discount and GST for ${name} cannot be negative`);
+      }
+
+      return {
+        id: productId,
+        name,
+        batchNumber: String(product.batchNumber ?? '').trim(),
+        expiryDate: String(product.expiryDate ?? '').trim(),
+        stock,
+        unitPrice,
+        mrp,
+        discount,
+        gstPercentage,
+        category: String(product.category ?? '').trim()
+      };
+    });
+
+    let totalAmount = 0;
+    let totalDiscount = 0;
+    let totalGst = 0;
+
+    for (const product of normalizedProducts) {
+      const lineSubtotal = product.unitPrice * product.stock;
+      const lineDiscount = lineSubtotal * (product.discount / 100);
+      const lineGst = (lineSubtotal - lineDiscount) * (product.gstPercentage / 100);
+
+      totalAmount += lineSubtotal;
+      totalDiscount += lineDiscount;
+      totalGst += lineGst;
+
+      statements.updateProduct.run({
+        ...product,
+        billId: id
+      });
+    }
+
+    totalAmount = round2(totalAmount);
+    totalDiscount = round2(totalDiscount);
+    totalGst = round2(totalGst);
+
+    statements.updateBill.run({
+      id,
+      invoice,
+      date,
+      supplierName: typeof billData.supplierName === 'string'
+        ? billData.supplierName.trim()
+        : existingBill.supplierName,
+      supplierDrugLn: typeof billData.supplierDrugLn === 'string'
+        ? billData.supplierDrugLn.trim()
+        : existingBill.supplierDrugLn,
+      supplierContact: typeof billData.supplierContact === 'string'
+        ? billData.supplierContact.trim()
+        : existingBill.supplierContact,
+      totalAmount,
+      totalDiscount,
+      totalGst,
+      total: Math.round(totalAmount + totalGst - totalDiscount)
+    });
+
+    return {
+      updated: true,
+      bill: statements.getBill.get(id),
+      products: statements.productsForBill.all(id)
+    };
+  });
+
+  return transaction();
 }
 
 /**
@@ -250,4 +432,4 @@ function deleteBill(billId) {
   return transaction();
 }
 
-export { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries };
+export { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries, updateBill };

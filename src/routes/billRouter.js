@@ -1,5 +1,5 @@
 import express from 'express';
-import { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries } from '../controllers/billControllerSql.js';
+import { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries, updateBill } from '../controllers/billControllerSql.js';
 
 const router = express.Router();
 
@@ -11,6 +11,25 @@ router.post('/bills', (req, res) => {
   } catch (error) {
     console.error('Error saving bill:', error);
     res.status(500).json({ error: 'Failed to save bill' });
+  }
+});
+
+// Route to update a purchase bill and its medicine lines
+router.put('/bills/:id', (req, res) => {
+  try {
+    const result = updateBill(req.params.id, req.body);
+
+    if (!result.updated) {
+      return res.status(404).json({ error: 'Bill not found' });
+    }
+
+    res.json({
+      message: 'Bill updated successfully',
+      ...result
+    });
+  } catch (error) {
+    console.error('Error updating bill:', error);
+    res.status(400).json({ error: error.message || 'Failed to update bill' });
   }
 });
 
