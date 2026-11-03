@@ -62,6 +62,19 @@ const statements = {
     FROM bill_products
     WHERE billId = ?
     ORDER BY id ASC
+  `),
+  getBill: db.prepare(`
+    SELECT id, invoice, supplierName, total
+    FROM bills
+    WHERE id = ?
+  `),
+  deleteProductsForBill: db.prepare(`
+    DELETE FROM bill_products
+    WHERE billId = ?
+  `),
+  deleteBill: db.prepare(`
+    DELETE FROM bills
+    WHERE id = ?
   `)
 };
 
@@ -203,4 +216,38 @@ function fetchSupplierSummaries(filters = {}) {
   return statements.supplierSummaries.all({ search, date, invoice });
 }
 
-export { addBill, fetchBillsWithProducts, fetchSupplierSummaries };
+/**
+ * Delete a purchase bill and every product row that belongs to it.
+ * Runs in a single transaction so a bill can never be left without its products.
+ *
+ * @param {number|string} billId
+ * @returns {{deleted: boolean, bill: Object|null, productsDeleted: number}}
+ */
+function deleteBill(billId) {
+  const id = Number(billId);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error('Invalid bill id');
+  }
+
+  const transaction = db.transaction(() => {
+    const bill = statements.getBill.get(id);
+
+    if (!bill) {
+      return { deleted: false, bill: null, productsDeleted: 0 };
+    }
+
+    const products = statements.deleteProductsForBill.run(id);
+    statements.deleteBill.run(id);
+
+    return {
+      deleted: true,
+      bill,
+      productsDeleted: products.changes
+    };
+  });
+
+  return transaction();
+}
+
+export { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries };

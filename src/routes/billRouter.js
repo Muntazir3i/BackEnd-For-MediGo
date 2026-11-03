@@ -1,5 +1,5 @@
 import express from 'express';
-import { addBill, fetchBillsWithProducts, fetchSupplierSummaries } from '../controllers/billControllerSql.js';
+import { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries } from '../controllers/billControllerSql.js';
 
 const router = express.Router();
 
@@ -11,6 +11,25 @@ router.post('/bills', (req, res) => {
   } catch (error) {
     console.error('Error saving bill:', error);
     res.status(500).json({ error: 'Failed to save bill' });
+  }
+});
+
+// Route to delete a purchase bill and all of its product rows
+router.delete('/bills/:id', (req, res) => {
+  try {
+    const result = deleteBill(req.params.id);
+
+    if (!result.deleted) {
+      return res.status(404).json({ error: 'Bill not found' });
+    }
+
+    res.json({
+      message: 'Bill and related products deleted successfully',
+      ...result
+    });
+  } catch (error) {
+    console.error('Error deleting bill:', error);
+    res.status(400).json({ error: error.message || 'Failed to delete bill' });
   }
 });
 
