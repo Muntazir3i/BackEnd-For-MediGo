@@ -22,10 +22,10 @@ router.post('/payments', (req, res) => {
   }
 });
 
-// Route to fetch all payment records
+// Route to fetch all payment records (optionally filtered by invoice number)
 router.get('/payments', (req, res) => {
   try {
-    const payments = fetchAllPayments();
+    const payments = fetchAllPayments(req.query.invoice || '');
     res.json(payments);
   } catch (error) {
     console.error('Error fetching payments:', error);
@@ -37,7 +37,7 @@ router.get('/payments', (req, res) => {
 router.get('/payments/loadMore/:lastId', (req, res) => {
   try {
     const lastId = req.params.lastId;
-    const payments = loadMorePayments(lastId);
+    const payments = loadMorePayments(lastId, req.query.invoice || '');
     res.json(payments);
   } catch (error) {
     console.error('Error fetching payments:', error);

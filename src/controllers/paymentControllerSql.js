@@ -17,8 +17,11 @@ const statements = {
   findPaymentByInvoice: db.prepare(`
     SELECT * FROM payments WHERE invoice = ?
   `),
-  fetchAllPayments: db.prepare(`
-    SELECT * FROM payments
+  fetchPaymentsPage: db.prepare(`
+    SELECT *
+    FROM payments
+    WHERE (@lastId IS NULL OR id < @lastId)
+      AND (@invoice IS NULL OR invoice LIKE @invoice)
     ORDER BY id DESC
     LIMIT 50
   `),
@@ -40,12 +43,6 @@ const statements = {
     UPDATE payments
     SET date = @date, invoice = @invoice, supplierName = @supplierName, drugLicenseNumber = @drugLicenseNumber, total = @total, type = @type
     WHERE id = @id
-  `),
-  loadMorePayments: db.prepare(`
-    SELECT * FROM payments
-    WHERE id < ?
-    ORDER BY id DESC
-    LIMIT 50
   `)
 };
 
@@ -62,6 +59,13 @@ function nextDay(date) {
   const parsed = new Date(`${date}T00:00:00.000Z`);
   parsed.setUTCDate(parsed.getUTCDate() + 1);
   return parsed.toISOString().slice(0, 10);
+}
+
+// Partial invoice search: "%123%" so any matching invoice number is returned.
+function normalizeInvoice(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed !== '' ? `%${trimmed}%` : null;
 }
 
 function addPayment(payment) {
@@ -83,8 +87,11 @@ function findPaymentByInvoice(invoice) {
   return statements.findPaymentByInvoice.get(invoice);
 }
 
-function fetchAllPayments() {
-  return statements.fetchAllPayments.all();
+function fetchAllPayments(invoice = '') {
+  return statements.fetchPaymentsPage.all({
+    lastId: null,
+    invoice: normalizeInvoice(invoice)
+  });
 }
 
 function fetchPaymentsByDate(date) {
@@ -116,8 +123,15 @@ function deletePayment(paymentId) {
   };
 }
 
-function loadMorePayments(lastId) {
-  return statements.loadMorePayments.all(lastId);
+function loadMorePayments(lastId, invoice = '') {
+  const numericId = Number(lastId);
+
+  if (!Number.isFinite(numericId)) return [];
+
+  return statements.fetchPaymentsPage.all({
+    lastId: numericId,
+    invoice: normalizeInvoice(invoice)
+  });
 }
 
 function updatePayment(payment) {
