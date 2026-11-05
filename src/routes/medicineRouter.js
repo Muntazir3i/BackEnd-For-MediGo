@@ -1,9 +1,11 @@
 import express from 'express';
 import {
   adjustStockById,
+  createSalt,
   deleteMedicineById,
   fetchAllMedicines,
   fetchMedicineById,
+  fetchSalts,
   updateMedicineById
 } from '../controllers/MedicinesControllerSql.js';
 
@@ -21,6 +23,28 @@ router.get('/medicines', (req, res) => {
   } catch (error) {
     console.error('Error fetching medicines:', error);
     sendError(res, error, 'Failed to fetch medicines');
+  }
+});
+
+// Salt catalogue search (optional salt assignment UI)
+router.get('/salts', (req, res) => {
+  try {
+    const search = req.query.search ?? req.query.q ?? '';
+    res.json(fetchSalts(search));
+  } catch (error) {
+    console.error('Error fetching salts:', error);
+    sendError(res, error, 'Failed to fetch salts');
+  }
+});
+
+// Create or reuse a salt by name
+router.post('/salts', (req, res) => {
+  try {
+    const salt = createSalt(req.body);
+    res.status(201).json(salt);
+  } catch (error) {
+    console.error('Error creating salt:', error);
+    sendError(res, error, 'Failed to create salt');
   }
 });
 

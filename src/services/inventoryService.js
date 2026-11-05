@@ -12,6 +12,10 @@
  */
 import db from '../db/billPayment.js';
 import { conflictError, notFoundError, validationError } from '../utils/httpError.js';
+import { cleanDisplay, normalizeKey } from '../utils/text.js';
+import { replaceProductSalts } from './saltService.js';
+
+export { cleanDisplay, normalizeKey };
 
 export const INVENTORY_SELECT = `
   SELECT
@@ -116,15 +120,6 @@ const statements = {
     )
   `)
 };
-
-export function cleanDisplay(value, fallback = '') {
-  if (value === null || value === undefined) return fallback;
-  return String(value).trim().replace(/\s+/g, ' ');
-}
-
-export function normalizeKey(value) {
-  return cleanDisplay(value).toUpperCase();
-}
 
 export function toNumber(value, fallback = 0) {
   if (value === null || value === undefined || value === '') return fallback;
@@ -515,6 +510,12 @@ export function updateInventoryItem(id, data = {}) {
         note: 'Stock adjusted from inventory edit'
       });
     }
+  }
+
+  // Salt composition is optional. Omitting the key preserves it; sending an
+  // empty list clears it.
+  if (Object.prototype.hasOwnProperty.call(data, 'salts')) {
+    replaceProductSalts(productId, data.salts);
   }
 
   return fetchInventoryById(itemId);

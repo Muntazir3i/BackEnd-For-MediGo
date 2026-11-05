@@ -181,14 +181,16 @@ CREATE INDEX IF NOT EXISTS idx_stock_movements_item ON stock_movements(inventory
 CREATE INDEX IF NOT EXISTS idx_stock_movements_reference ON stock_movements(referenceType, referenceId);
 `);
 
+// Archived batches (isActive = 0) must not count towards live stock.
+db.exec('DROP VIEW IF EXISTS product_stock');
 db.exec(`
-CREATE VIEW IF NOT EXISTS product_stock AS
+CREATE VIEW product_stock AS
 SELECT
   p.id AS productId,
   p.name,
   p.isActive,
-  COALESCE(SUM(i.quantity), 0) AS stockOnHand,
-  COUNT(CASE WHEN i.quantity > 0 THEN 1 END) AS batchesInStock
+  COALESCE(SUM(CASE WHEN i.isActive = 1 THEN i.quantity ELSE 0 END), 0) AS stockOnHand,
+  COUNT(CASE WHEN i.isActive = 1 AND i.quantity > 0 THEN 1 END) AS batchesInStock
 FROM products p
 LEFT JOIN inventory_items i ON i.productId = p.id
 GROUP BY p.id;

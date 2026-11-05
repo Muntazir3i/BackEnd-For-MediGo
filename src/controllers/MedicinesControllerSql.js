@@ -12,6 +12,7 @@ import {
   listInventory,
   updateInventoryItem
 } from '../services/inventoryService.js';
+import { findOrCreateSalt, listSalts } from '../services/saltService.js';
 
 export const MEDICINE_PAGE_SIZE = 100;
 
@@ -35,4 +36,12 @@ export function deleteMedicineById(id) {
 export function adjustStockById(id, data = {}) {
   const medicine = adjustInventoryItem(id, data);
   return { adjusted: true, medicine };
+}
+
+export function fetchSalts(term = '', options = {}) {
+  return listSalts(term, options);
+}
+
+export function createSalt(data = {}) {
+  return findOrCreateSalt(data.name);
 }

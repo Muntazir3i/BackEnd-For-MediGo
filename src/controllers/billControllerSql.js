@@ -17,6 +17,7 @@ import {
   round2,
   toNumber
 } from '../services/inventoryService.js';
+import { replaceProductSalts } from '../services/saltService.js';
 
 export const DEFAULT_BILL_PAGE_SIZE = 5;
 
@@ -168,6 +169,8 @@ function normalizePurchaseLine(product = {}) {
     gstPercentage,
     category: cleanDisplay(product.category),
     supplier: cleanDisplay(product.supplier),
+    // undefined keeps the product's existing salt composition; [] clears it.
+    salts: product.salts,
     lineSubtotal,
     lineDiscount,
     lineGst
@@ -271,6 +274,11 @@ export function addBill(billData = {}) {
 
     for (const line of lines) {
       const product = resolveProduct(line);
+
+      if (line.salts !== undefined) {
+        replaceProductSalts(product.id, line.salts);
+      }
+
       const item = resolveInventoryItem(product.id, {
         ...line,
         supplier: line.supplier || cleanDisplay(billData.supplierName),
@@ -356,6 +364,11 @@ export function updateBill(billId, billData = {}) {
     for (const line of normalized) {
       const previous = existingById.get(line.id);
       const product = resolveProduct(line);
+
+      if (line.salts !== undefined) {
+        replaceProductSalts(product.id, line.salts);
+      }
+
       const target = resolveInventoryItem(product.id, {
         ...line,
         supplier: previous.supplierSnapshot || cleanDisplay(billData.supplierName),
