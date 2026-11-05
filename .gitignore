@@ -1,5 +1,6 @@
 node_modules/
 invoices/
+backups/
 
 # Ignore OS or IDE-specific stuff
 .DS_Store
@@ -8,5 +9,7 @@ invoices/
 src/data/
 billsNpayment.db
 supplier.db
+billsNpayment.db-shm
+billsNpayment.db-wal
 
 .env

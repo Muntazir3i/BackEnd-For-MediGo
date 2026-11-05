@@ -1,31 +1,77 @@
 /**
- * Controller for managing bill-related database operations using SQLite.
+ * Purchase-bill controller.
  *
- * This controller handles inserting new bills along with their associated
- * products into the database within a transaction. Bills are fetched in small
- * pages (5 by default) so the inventory screen stays fast even when there are
- * thousands of bills.
+ * Purchase history now lives in purchase_bills / purchase_items. Live stock
+ * lives in inventory_items, so editing a historical bill applies an explicit
+ * quantity delta and writes a stock movement instead of rewriting stock rows.
  */
-
 import db from '../db/billPayment.js';
+import { conflictError, notFoundError, validationError } from '../utils/httpError.js';
+import {
+  applyStockMovement,
+  cleanDisplay,
+  formatSaltSummary,
+  getSaltsForProductIds,
+  resolveInventoryItem,
+  resolveProduct,
+  round2,
+  toNumber
+} from '../services/inventoryService.js';
 
 export const DEFAULT_BILL_PAGE_SIZE = 5;
 
-// 1. Pre-compile statements for better performance
-// This avoids parsing the SQL string on every function call.
 const statements = {
   insertBill: db.prepare(`
-    INSERT INTO bills (id, invoice, date, supplierName, supplierDrugLn, supplierContact, totalAmount, totalGst, totalDiscount, total, type)
-    VALUES (@id, @invoice, @date, @supplierName, @supplierDrugLn, @supplierContact, @totalAmount, @totalGst, @totalDiscount, @total, @type)
+    INSERT INTO purchase_bills (
+      id, invoice, date, supplierName, supplierDrugLn, supplierContact,
+      totalAmount, totalGst, totalDiscount, total, type, status, createdAt, updatedAt
+    ) VALUES (
+      @id, @invoice, @date, @supplierName, @supplierDrugLn, @supplierContact,
+      @totalAmount, @totalGst, @totalDiscount, @total, @type, 'posted',
+      datetime('now'), datetime('now')
+    )
   `),
-  insertProduct: db.prepare(`
-    INSERT INTO bill_products (id, billId, name, batchNumber, expiryDate, stock, unitPrice, mrp, discount, gstPercentage, supplier, category)
-    VALUES (@id, @billId, @name, @batchNumber, @expiryDate, @stock, @unitPrice, @mrp, @discount, @gstPercentage, @supplier, @category)
+  getBill: db.prepare('SELECT * FROM purchase_bills WHERE id = ?'),
+  productsForBill: db.prepare(`
+    SELECT
+      pi.*,
+      i.quantity AS availableStock,
+      i.sellingPrice AS availableSellingPrice
+    FROM purchase_items pi
+    LEFT JOIN inventory_items i ON i.id = pi.inventoryItemId
+    WHERE pi.purchaseBillId = ?
+    ORDER BY pi.id ASC
+  `),
+  insertPurchaseItem: db.prepare(`
+    INSERT INTO purchase_items (
+      purchaseBillId, productId, inventoryItemId, nameSnapshot,
+      batchNumberSnapshot, expiryDateSnapshot, quantity, unitPrice, mrp,
+      discount, gstPercentage, supplierSnapshot, categorySnapshot, createdAt
+    ) VALUES (
+      @purchaseBillId, @productId, @inventoryItemId, @nameSnapshot,
+      @batchNumberSnapshot, @expiryDateSnapshot, @quantity, @unitPrice, @mrp,
+      @discount, @gstPercentage, @supplierSnapshot, @categorySnapshot, datetime('now')
+    )
+  `),
+  updatePurchaseItem: db.prepare(`
+    UPDATE purchase_items
+    SET productId = @productId,
+        inventoryItemId = @inventoryItemId,
+        nameSnapshot = @nameSnapshot,
+        batchNumberSnapshot = @batchNumberSnapshot,
+        expiryDateSnapshot = @expiryDateSnapshot,
+        quantity = @quantity,
+        unitPrice = @unitPrice,
+        mrp = @mrp,
+        discount = @discount,
+        gstPercentage = @gstPercentage,
+        categorySnapshot = @categorySnapshot
+    WHERE id = @id AND purchaseBillId = @purchaseBillId
   `),
   countBills: db.prepare(`
     SELECT COUNT(*) AS total
-    FROM bills
-    WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
+    FROM purchase_bills
+    WHERE status <> 'void'
       AND (@supplier IS NULL OR supplierName = @supplier)
       AND (@supplierSearch IS NULL OR supplierName LIKE @supplierSearch)
       AND (@date IS NULL OR date LIKE @date)
@@ -33,8 +79,8 @@ const statements = {
   `),
   pageBills: db.prepare(`
     SELECT *
-    FROM bills
-    WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
+    FROM purchase_bills
+    WHERE status <> 'void'
       AND (@supplier IS NULL OR supplierName = @supplier)
       AND (@supplierSearch IS NULL OR supplierName LIKE @supplierSearch)
       AND (@date IS NULL OR date LIKE @date)
@@ -48,8 +94,8 @@ const statements = {
       MAX(supplierDrugLn) AS supplierDrugLn,
       COUNT(*) AS billCount,
       COALESCE(SUM(total), 0) AS total
-    FROM bills
-    WHERE (type = 'Bill' OR (type IS NULL AND supplierName IS NOT NULL))
+    FROM purchase_bills
+    WHERE status <> 'void'
       AND supplierName IS NOT NULL
       AND (@search IS NULL OR supplierName LIKE @search)
       AND (@date IS NULL OR date LIKE @date)
@@ -57,19 +103,8 @@ const statements = {
     GROUP BY supplierName
     ORDER BY supplierName COLLATE NOCASE ASC
   `),
-  productsForBill: db.prepare(`
-    SELECT *
-    FROM bill_products
-    WHERE billId = ?
-    ORDER BY id ASC
-  `),
-  getBill: db.prepare(`
-    SELECT *
-    FROM bills
-    WHERE id = ?
-  `),
   updateBill: db.prepare(`
-    UPDATE bills
+    UPDATE purchase_bills
     SET invoice = @invoice,
         date = @date,
         supplierName = @supplierName,
@@ -78,199 +113,304 @@ const statements = {
         totalAmount = @totalAmount,
         totalGst = @totalGst,
         totalDiscount = @totalDiscount,
-        total = @total
+        total = @total,
+        updatedAt = datetime('now')
     WHERE id = @id
   `),
-  updateProduct: db.prepare(`
-    UPDATE bill_products
-    SET name = @name,
-        batchNumber = @batchNumber,
-        expiryDate = @expiryDate,
-        stock = @stock,
-        unitPrice = @unitPrice,
-        mrp = @mrp,
-        discount = @discount,
-        gstPercentage = @gstPercentage,
-        category = @category
-    WHERE id = @id AND billId = @billId
-  `),
-  deleteProductsForBill: db.prepare(`
-    DELETE FROM bill_products
-    WHERE billId = ?
-  `),
-  deleteBill: db.prepare(`
-    DELETE FROM bills
-    WHERE id = ?
+  voidBill: db.prepare(`
+    UPDATE purchase_bills
+    SET status = 'void', updatedAt = datetime('now')
+    WHERE id = @id AND status <> 'void'
   `)
 };
 
-function addBill(billData) {
-  const transaction = db.transaction(() => {
-    // 2. Use named parameters with fallbacks
-    statements.insertBill.run({
-      id: billData.id,
-      invoice: billData.invoice || null,
-      date: billData.date || null,
-      supplierName: billData.supplierName || null,
-      supplierDrugLn: billData.supplierDrugLn || null,
-      supplierContact: billData.supplierContact || null,
-      totalAmount: billData.totalAmount || 0,
-      totalGst: billData.totalGst || 0,
-      totalDiscount: billData.totalDiscount || 0,
-      total: billData.total || 0,
-      type: billData.type || null
-    });
-
-    const products = billData.products || [];
-    for (const product of products) {
-      statements.insertProduct.run({
-        id: product.id,
-        billId: billData.id,
-        name: product.name || null,
-        batchNumber: product.batchNumber || null,
-        expiryDate: product.expiryDate || null,
-        stock: product.stock || 0,
-        unitPrice: product.unitPrice || 0,
-        mrp: product.mrp || 0,
-        discount: product.discount || 0,
-        gstPercentage: product.gstPercentage || 0,
-        supplier: product.supplier || null,
-        category: product.category || null
-      });
-    }
-  });
-
-  transaction();
-
-  return { message: 'Bill saved successfully', billId: billData.id };
-}
-
-function toNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function round2(value) {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
-/**
- * Update a purchase bill and all of its medicine lines in one transaction.
- * Totals are recalculated on the server from the edited medicine values so the
- * stored bill always matches its products.
- *
- * @param {number|string} billId
- * @param {Object} billData
- * @returns {{updated: boolean, bill: Object|null, products: Array<Object>}}
- */
-function updateBill(billId, billData = {}) {
-  const id = Number(billId);
-
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error('Invalid bill id');
-  }
-
+function requireInvoiceAndDate(billData = {}) {
   const invoice = typeof billData.invoice === 'string' ? billData.invoice.trim() : '';
   const date = typeof billData.date === 'string' ? billData.date.trim() : '';
 
-  if (!invoice) {
-    throw new Error('Invoice number is required');
-  }
-
+  if (!invoice) throw validationError('Invoice number is required');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    throw new Error('A valid bill date is required');
+    throw validationError('A valid bill date is required');
   }
 
+  return { invoice, date };
+}
+
+function normalizePurchaseLine(product = {}) {
+  const name = cleanDisplay(product.name);
+  if (!name) throw validationError('Every medicine line needs a name');
+
+  const quantity = toNumber(product.stock ?? product.quantity);
+  const unitPrice = toNumber(product.unitPrice ?? product.purchasePrice);
+  const mrp = toNumber(product.mrp);
+  const discount = toNumber(product.discount);
+  const gstPercentage = toNumber(product.gstPercentage ?? product.gst);
+
+  if (quantity <= 0) throw validationError(`Quantity for ${name} must be greater than 0`);
+  if (unitPrice < 0 || mrp < 0 || discount < 0 || gstPercentage < 0) {
+    throw validationError(`Rate, MRP, discount and GST for ${name} cannot be negative`);
+  }
+  if (discount > 100) throw validationError(`Discount for ${name} cannot exceed 100%`);
+
+  const lineSubtotal = round2(unitPrice * quantity);
+  const lineDiscount = round2(lineSubtotal * (discount / 100));
+  const lineGst = round2((lineSubtotal - lineDiscount) * (gstPercentage / 100));
+
+  return {
+    id: Number(product.id) || null,
+    name,
+    batchNumber: cleanDisplay(product.batchNumber),
+    expiryDate: cleanDisplay(product.expiryDate),
+    quantity,
+    unitPrice,
+    mrp,
+    discount,
+    gstPercentage,
+    category: cleanDisplay(product.category),
+    supplier: cleanDisplay(product.supplier),
+    lineSubtotal,
+    lineDiscount,
+    lineGst
+  };
+}
+
+function computeTotals(lines) {
+  let totalAmount = 0;
+  let totalDiscount = 0;
+  let totalGst = 0;
+
+  for (const line of lines) {
+    totalAmount += line.lineSubtotal;
+    totalDiscount += line.lineDiscount;
+    totalGst += line.lineGst;
+  }
+
+  totalAmount = round2(totalAmount);
+  totalDiscount = round2(totalDiscount);
+  totalGst = round2(totalGst);
+
+  return {
+    totalAmount,
+    totalDiscount,
+    totalGst,
+    total: Math.round(totalAmount + totalGst - totalDiscount)
+  };
+}
+
+function mapPurchaseItem(row, saltsByProduct = new Map()) {
+  const salts = saltsByProduct.get(row.productId) ?? [];
+  return {
+    id: row.id,
+    billId: row.purchaseBillId,
+    purchaseBillId: row.purchaseBillId,
+    productId: row.productId,
+    inventoryItemId: row.inventoryItemId,
+    name: row.nameSnapshot,
+    batchNumber: row.batchNumberSnapshot,
+    expiryDate: row.expiryDateSnapshot,
+    stock: row.quantity,
+    quantity: row.quantity,
+    unitPrice: row.unitPrice,
+    mrp: row.mrp,
+    discount: row.discount,
+    gstPercentage: row.gstPercentage,
+    supplier: row.supplierSnapshot,
+    category: row.categorySnapshot,
+    availableStock: row.availableStock ?? 0,
+    salts,
+    saltSummary: formatSaltSummary(salts)
+  };
+}
+
+function loadBillProducts(billId) {
+  const rows = statements.productsForBill.all(billId);
+  const saltsByProduct = getSaltsForProductIds(rows.map((row) => row.productId));
+  return rows.map((row) => mapPurchaseItem(row, saltsByProduct));
+}
+
+function loadBill(billId) {
+  const bill = statements.getBill.get(Number(billId));
+  if (!bill) return null;
+  return {
+    ...bill,
+    products: loadBillProducts(bill.id)
+  };
+}
+
+export function addBill(billData = {}) {
+  const { invoice, date } = requireInvoiceAndDate(billData);
+  const products = Array.isArray(billData.products) ? billData.products : [];
+
+  if (products.length === 0) {
+    throw validationError('At least one medicine line is required');
+  }
+
+  const requestedId = Number(billData.id);
+  const billId = Number.isSafeInteger(requestedId) && requestedId > 0 ? requestedId : Date.now();
+  const lines = products.map(normalizePurchaseLine);
+  const totals = computeTotals(lines);
+
+  const transaction = db.transaction(() => {
+    if (statements.getBill.get(billId)) {
+      throw conflictError('A purchase bill with this id already exists. Please retry.');
+    }
+
+    statements.insertBill.run({
+      id: billId,
+      invoice,
+      date,
+      supplierName: cleanDisplay(billData.supplierName) || null,
+      supplierDrugLn: cleanDisplay(billData.supplierDrugLn) || null,
+      supplierContact: cleanDisplay(billData.supplierContact) || null,
+      totalAmount: totals.totalAmount,
+      totalGst: totals.totalGst,
+      totalDiscount: totals.totalDiscount,
+      total: totals.total,
+      type: cleanDisplay(billData.type) || 'Bill'
+    });
+
+    for (const line of lines) {
+      const product = resolveProduct(line);
+      const item = resolveInventoryItem(product.id, {
+        ...line,
+        supplier: line.supplier || cleanDisplay(billData.supplierName),
+        receivedAt: date
+      });
+
+      statements.insertPurchaseItem.run({
+        purchaseBillId: billId,
+        productId: product.id,
+        inventoryItemId: item.id,
+        nameSnapshot: line.name,
+        batchNumberSnapshot: line.batchNumber,
+        expiryDateSnapshot: line.expiryDate,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        mrp: line.mrp,
+        discount: line.discount,
+        gstPercentage: line.gstPercentage,
+        supplierSnapshot: line.supplier || cleanDisplay(billData.supplierName) || null,
+        categorySnapshot: line.category || null
+      });
+
+      applyStockMovement({
+        inventoryItemId: item.id,
+        delta: line.quantity,
+        type: 'purchase',
+        referenceType: 'purchase_bill',
+        referenceId: billId,
+        note: `Purchase bill ${invoice}`
+      });
+    }
+
+    return { message: 'Bill saved successfully', billId, bill: loadBill(billId) };
+  });
+
+  return transaction.immediate();
+}
+
+export function updateBill(billId, billData = {}) {
+  const id = Number(billId);
+
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw validationError('Invalid bill id');
+  }
+
+  const { invoice, date } = requireInvoiceAndDate(billData);
   const products = Array.isArray(billData.products) ? billData.products : [];
 
   const transaction = db.transaction(() => {
     const existingBill = statements.getBill.get(id);
 
-    if (!existingBill) {
+    if (!existingBill || existingBill.status === 'void') {
       return { updated: false, bill: null, products: [] };
     }
 
-    const existingProducts = statements.productsForBill.all(id);
+    const existingItems = statements.productsForBill.all(id);
 
-    // Only existing lines can be edited. Keeping the line count fixed prevents
-    // accidentally dropping medicine rows because of a malformed request.
-    if (products.length !== existingProducts.length) {
-      throw new Error('All medicine lines must be included when updating a bill');
+    if (products.length !== existingItems.length) {
+      throw validationError('All medicine lines must be included when updating a bill');
     }
 
-    const existingById = new Map(
-      existingProducts.map((product) => [Number(product.id), product])
-    );
+    const existingById = new Map(existingItems.map((item) => [Number(item.id), item]));
     const seen = new Set();
+    const normalized = products.map((product) => {
+      const line = normalizePurchaseLine(product);
+      const itemId = Number(product.id);
 
-    const normalizedProducts = products.map((product) => {
-      const productId = Number(product.id);
-
-      if (!existingById.has(productId)) {
-        throw new Error('One or more medicine lines do not belong to this bill');
+      if (!existingById.has(itemId)) {
+        throw validationError('One or more medicine lines do not belong to this bill');
       }
 
-      if (seen.has(productId)) {
-        throw new Error('Duplicate medicine line in the update');
+      if (seen.has(itemId)) {
+        throw validationError('Duplicate medicine line in the update');
       }
 
-      seen.add(productId);
+      seen.add(itemId);
 
-      const name = String(product.name ?? '').trim();
-      const stock = toNumber(product.stock);
-      const unitPrice = toNumber(product.unitPrice);
-      const mrp = toNumber(product.mrp);
-      const discount = toNumber(product.discount);
-      const gstPercentage = toNumber(product.gstPercentage);
-
-      if (!name) {
-        throw new Error('Every medicine line needs a name');
-      }
-
-      if (stock <= 0) {
-        throw new Error(`Quantity for ${name} must be greater than 0`);
-      }
-
-      if (unitPrice < 0 || mrp < 0 || discount < 0 || gstPercentage < 0) {
-        throw new Error(`Rate, MRP, discount and GST for ${name} cannot be negative`);
-      }
-
-      return {
-        id: productId,
-        name,
-        batchNumber: String(product.batchNumber ?? '').trim(),
-        expiryDate: String(product.expiryDate ?? '').trim(),
-        stock,
-        unitPrice,
-        mrp,
-        discount,
-        gstPercentage,
-        category: String(product.category ?? '').trim()
-      };
+      return { ...line, id: itemId };
     });
 
-    let totalAmount = 0;
-    let totalDiscount = 0;
-    let totalGst = 0;
+    const totals = computeTotals(normalized);
 
-    for (const product of normalizedProducts) {
-      const lineSubtotal = product.unitPrice * product.stock;
-      const lineDiscount = lineSubtotal * (product.discount / 100);
-      const lineGst = (lineSubtotal - lineDiscount) * (product.gstPercentage / 100);
+    for (const line of normalized) {
+      const previous = existingById.get(line.id);
+      const product = resolveProduct(line);
+      const target = resolveInventoryItem(product.id, {
+        ...line,
+        supplier: previous.supplierSnapshot || cleanDisplay(billData.supplierName),
+        receivedAt: date
+      });
 
-      totalAmount += lineSubtotal;
-      totalDiscount += lineDiscount;
-      totalGst += lineGst;
+      if (previous.inventoryItemId === target.id) {
+        const delta = round2(line.quantity - previous.quantity);
+        if (delta !== 0) {
+          applyStockMovement({
+            inventoryItemId: target.id,
+            delta,
+            type: 'purchase_edit',
+            referenceType: 'purchase_bill',
+            referenceId: id,
+            note: `Quantity changed from ${previous.quantity} to ${line.quantity}`
+          });
+        }
+      } else {
+        // Batch/name changed: return the old units first, then receive the new ones.
+        applyStockMovement({
+          inventoryItemId: previous.inventoryItemId,
+          delta: -previous.quantity,
+          type: 'purchase_edit',
+          referenceType: 'purchase_bill',
+          referenceId: id,
+          note: 'Batch changed while editing a purchase bill'
+        });
 
-      statements.updateProduct.run({
-        ...product,
-        billId: id
+        applyStockMovement({
+          inventoryItemId: target.id,
+          delta: line.quantity,
+          type: 'purchase_edit',
+          referenceType: 'purchase_bill',
+          referenceId: id,
+          note: 'New batch added while editing a purchase bill'
+        });
+      }
+
+      statements.updatePurchaseItem.run({
+        id: line.id,
+        purchaseBillId: id,
+        productId: product.id,
+        inventoryItemId: target.id,
+        nameSnapshot: line.name,
+        batchNumberSnapshot: line.batchNumber,
+        expiryDateSnapshot: line.expiryDate,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        mrp: line.mrp,
+        discount: line.discount,
+        gstPercentage: line.gstPercentage,
+        categorySnapshot: line.category || null
       });
     }
-
-    totalAmount = round2(totalAmount);
-    totalDiscount = round2(totalDiscount);
-    totalGst = round2(totalGst);
 
     statements.updateBill.run({
       id,
@@ -285,41 +425,23 @@ function updateBill(billId, billData = {}) {
       supplierContact: typeof billData.supplierContact === 'string'
         ? billData.supplierContact.trim()
         : existingBill.supplierContact,
-      totalAmount,
-      totalDiscount,
-      totalGst,
-      total: Math.round(totalAmount + totalGst - totalDiscount)
+      totalAmount: totals.totalAmount,
+      totalDiscount: totals.totalDiscount,
+      totalGst: totals.totalGst,
+      total: totals.total
     });
 
     return {
       updated: true,
-      bill: statements.getBill.get(id),
-      products: statements.productsForBill.all(id)
+      bill: loadBill(id),
+      products: loadBillProducts(id)
     };
   });
 
-  return transaction();
+  return transaction.immediate();
 }
 
-/**
- * Fetch a page of bills (with their products) newest first.
- *
- * @param {Object} options
- * @param {number} [options.limit=5]          Maximum bills to return.
- * @param {number} [options.offset=0]         Number of bills to skip.
- * @param {string} [options.supplierName]     Optional exact supplier name filter.
- * @param {string} [options.supplierSearch]   Optional partial supplier name filter.
- * @param {string} [options.date]             Optional bill date (YYYY-MM-DD).
- * @param {string} [options.invoice]          Optional invoice/bill number filter.
- * @returns {{
- *   bills: Array<Object>,
- *   total: number,
- *   limit: number,
- *   offset: number,
- *   hasMore: boolean
- * }}
- */
-function fetchBillsWithProducts({
+export function fetchBillsWithProducts({
   limit = DEFAULT_BILL_PAGE_SIZE,
   offset = 0,
   supplierName = '',
@@ -335,7 +457,6 @@ function fetchBillsWithProducts({
   const supplierLike = supplierSearch && supplierSearch.trim() !== ''
     ? `%${supplierSearch.trim()}%`
     : null;
-  // Use a prefix match so dates stored with a time component are included.
   const dateFilter = date && date.trim() !== ''
     ? `${date.trim()}%`
     : null;
@@ -359,7 +480,7 @@ function fetchBillsWithProducts({
 
   const bills = rows.map((row) => ({
     ...row,
-    products: statements.productsForBill.all(row.id)
+    products: loadBillProducts(row.id)
   }));
 
   return {
@@ -371,18 +492,7 @@ function fetchBillsWithProducts({
   };
 }
 
-/**
- * Fetch the list of suppliers with their total bill count and amount.
- * Returns every supplier by default; pass filters to narrow the result.
- *
- * @param {string|Object} [filters]
- * @param {string} [filters.search]   Partial supplier name.
- * @param {string} [filters.date]     Bill date (YYYY-MM-DD).
- * @param {string} [filters.invoice]  Partial invoice/bill number.
- * @returns {Array<{supplierName: string, supplierDrugLn: string, billCount: number, total: number}>}
- */
-function fetchSupplierSummaries(filters = {}) {
-  // Backwards compatibility: previously this function accepted a plain search string.
+export function fetchSupplierSummaries(filters = {}) {
   const options = typeof filters === 'string' ? { search: filters } : (filters || {});
 
   const search = options.search && options.search.trim() !== ''
@@ -399,17 +509,14 @@ function fetchSupplierSummaries(filters = {}) {
 }
 
 /**
- * Delete a purchase bill and every product row that belongs to it.
- * Runs in a single transaction so a bill can never be left without its products.
- *
- * @param {number|string} billId
- * @returns {{deleted: boolean, bill: Object|null, productsDeleted: number}}
+ * Voiding replaces hard deletion. Stock is reversed only when every unit from
+ * the purchase is still on hand; otherwise the caller gets a clear conflict.
  */
-function deleteBill(billId) {
+export function deleteBill(billId) {
   const id = Number(billId);
 
   if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error('Invalid bill id');
+    throw validationError('Invalid bill id');
   }
 
   const transaction = db.transaction(() => {
@@ -419,17 +526,54 @@ function deleteBill(billId) {
       return { deleted: false, bill: null, productsDeleted: 0 };
     }
 
-    const products = statements.deleteProductsForBill.run(id);
-    statements.deleteBill.run(id);
+    if (bill.status === 'void') {
+      return { deleted: false, bill, productsDeleted: 0, alreadyVoid: true };
+    }
+
+    const items = statements.productsForBill.all(id);
+    const requiredByInventory = new Map();
+
+    for (const item of items) {
+      if (!item.inventoryItemId) continue;
+      requiredByInventory.set(
+        item.inventoryItemId,
+        round2((requiredByInventory.get(item.inventoryItemId) ?? 0) + item.quantity)
+      );
+    }
+
+    for (const [inventoryItemId, required] of requiredByInventory) {
+      const live = db.prepare('SELECT * FROM inventory_items WHERE id = ?').get(inventoryItemId);
+      if (!live || live.quantity < required) {
+        throw conflictError(
+          `Cannot void this bill because ${Number(required) - Number(live?.quantity ?? 0)} unit(s) from it have already been sold or adjusted.`
+        );
+      }
+    }
+
+    for (const [inventoryItemId, required] of requiredByInventory) {
+      applyStockMovement({
+        inventoryItemId,
+        delta: -required,
+        type: 'void',
+        referenceType: 'purchase_bill',
+        referenceId: id,
+        note: `Purchase bill ${bill.invoice} voided`
+      });
+    }
+
+    statements.voidBill.run({ id });
 
     return {
       deleted: true,
-      bill,
-      productsDeleted: products.changes
+      voided: true,
+      bill: loadBill(id),
+      productsDeleted: items.length
     };
   });
 
-  return transaction();
+  return transaction.immediate();
 }
 
-export { addBill, deleteBill, fetchBillsWithProducts, fetchSupplierSummaries, updateBill };
+export function fetchPurchaseBillById(billId) {
+  return loadBill(billId);
+}

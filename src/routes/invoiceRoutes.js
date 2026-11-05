@@ -1,16 +1,23 @@
 import express from "express";
-
 import {
     saveInvoice,
-    getInvoicesByDateAndCustomer
+    getInvoicesByDateAndCustomer,
+    getInvoice,
+    voidInvoice
 } from "../controllers/invoiceController.js";
 
 const router = express.Router();
 
-// save invoice
+// Save/finalize a sale and deduct stock
 router.post("/save", saveInvoice);
 
-// get invoice by date + customer
+// Search invoices by date and customer name
 router.get("/search", getInvoicesByDateAndCustomer);
+
+// Fetch one invoice with its immutable line snapshots
+router.get("/:id", getInvoice);
+
+// Void a sale and restore stock
+router.post("/:id/void", voidInvoice);
 
 export default router;

@@ -14,8 +14,9 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const statements = {
   transactions: db.prepare(`
     SELECT id, date, invoice, supplierName, total, COALESCE(type, 'Bill') AS type
-    FROM bills
+    FROM purchase_bills
     WHERE supplierName = @supplierName
+      AND status <> 'void'
       AND (@from IS NULL OR date >= @from)
       AND (@toExclusive IS NULL OR date < @toExclusive)
     UNION ALL
@@ -28,7 +29,7 @@ const statements = {
   `),
   netBeforeFrom: db.prepare(`
     SELECT
-      COALESCE((SELECT SUM(total) FROM bills WHERE supplierName = @supplierName AND date < @from), 0)
+      COALESCE((SELECT SUM(total) FROM purchase_bills WHERE supplierName = @supplierName AND status <> 'void' AND date < @from), 0)
       - COALESCE((SELECT SUM(total) FROM payments WHERE supplierName = @supplierName AND date < @from), 0)
       AS net
   `),

@@ -1,32 +1,17 @@
 /**
- * Controller for handling medicine search operations using SQLite.
+ * Medicine search.
  *
- * Searches medicines by name or batch number using partial matching and
- * limits the results so the inventory screen stays responsive.
+ * Searches the canonical product name, its salt composition, or a batch
+ * number across live inventory. Zero-stock batches are included so the UI can
+ * show "out of stock" instead of making the medicine disappear.
  */
-import db from "../db/billPayment.js";
+import { searchInventory } from '../services/inventoryService.js';
 
 const SEARCH_RESULT_LIMIT = 100;
 
-// 1. Pre-compile statements for better performance
-// This avoids parsing the SQL string on every function call.
-const statements = {
-    fetchSearchMed: db.prepare(`
-        SELECT *
-        FROM bill_products
-        WHERE name LIKE @term
-           OR batchNumber LIKE @term
-        ORDER BY id DESC
-        LIMIT ${SEARCH_RESULT_LIMIT}
-    `)
-};
-
 export function fetchSearchMed(name) {
-    // 2. Use partial matching so both a medicine name and a batch number
-    // can be searched from the same input.
-    const searchTerm = name && name.trim() !== ''
-        ? `%${name.trim()}%`
-        : '%';
-
-    return statements.fetchSearchMed.all({ term: searchTerm });
+  return searchInventory(name, {
+    limit: SEARCH_RESULT_LIMIT,
+    includeInactive: false
+  });
 }
