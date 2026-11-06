@@ -4,7 +4,10 @@ import {
   createSalt,
   deleteMedicineById,
   fetchAllMedicines,
+  fetchExpiringInventory,
+  fetchLowStockProducts,
   fetchMedicineById,
+  fetchOutOfStockProducts,
   fetchSalts,
   updateMedicineById
 } from '../controllers/MedicinesControllerSql.js';
@@ -45,6 +48,36 @@ router.post('/salts', (req, res) => {
   } catch (error) {
     console.error('Error creating salt:', error);
     sendError(res, error, 'Failed to create salt');
+  }
+});
+
+// Dashboard stock indicators (aggregated across active batches)
+router.get('/low-stock', (req, res) => {
+  try {
+    res.json(fetchLowStockProducts());
+  } catch (error) {
+    console.error('Error fetching low stock:', error);
+    sendError(res, error, 'Failed to fetch low stock products');
+  }
+});
+
+router.get('/out-of-stock', (req, res) => {
+  try {
+    res.json(fetchOutOfStockProducts());
+  } catch (error) {
+    console.error('Error fetching out of stock:', error);
+    sendError(res, error, 'Failed to fetch out of stock products');
+  }
+});
+
+// Batches expiring between today and three months from now
+router.get('/expiry-stock', (req, res) => {
+  try {
+    const months = Number(req.query.months) || 3;
+    res.json(fetchExpiringInventory({ months }));
+  } catch (error) {
+    console.error('Error fetching expiring stock:', error);
+    sendError(res, error, 'Failed to fetch expiring stock');
   }
 });
 

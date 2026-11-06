@@ -9,7 +9,10 @@ import {
   adjustInventoryItem,
   deactivateInventoryItem,
   fetchInventoryById,
+  listExpiringInventory,
   listInventory,
+  listLowStockProducts,
+  listOutOfStockProducts,
   updateInventoryItem
 } from '../services/inventoryService.js';
 import { findOrCreateSalt, listSalts } from '../services/saltService.js';
@@ -44,4 +47,16 @@ export function fetchSalts(term = '', options = {}) {
 
 export function createSalt(data = {}) {
   return findOrCreateSalt(data.name);
+}
+
+export function fetchLowStockProducts() {
+  return listLowStockProducts();
+}
+
+export function fetchOutOfStockProducts() {
+  return listOutOfStockProducts();
+}
+
+export function fetchExpiringInventory(options = {}) {
+  return listExpiringInventory(options);
 }

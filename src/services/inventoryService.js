@@ -413,6 +413,127 @@ export function listInventory({ limit = 100, offset = 0 } = {}) {
   return attachSalts(rows);
 }
 
+const STOCK_SUMMARY_SELECT = `
+  SELECT
+    p.id,
+    p.id AS productId,
+    p.name,
+    COALESCE(p.category, '') AS category,
+    COALESCE(stock.totalStock, 0) AS stock,
+    COALESCE(stock.batchCount, 0) AS batchCount,
+    stock.expiryDate,
+    stock.mrp,
+    COALESCE(latest.supplier, '') AS supplier,
+    COALESCE(latest.batchNumber, '') AS batchNumber
+  FROM products p
+  LEFT JOIN (
+    SELECT
+      productId,
+      SUM(quantity) AS totalStock,
+      COUNT(*) AS batchCount,
+      MIN(CASE WHEN expiryDate IS NOT NULL AND expiryDate <> '' THEN expiryDate END) AS expiryDate,
+      MAX(mrp) AS mrp
+    FROM inventory_items
+    WHERE isActive = 1
+    GROUP BY productId
+  ) stock ON stock.productId = p.id
+  LEFT JOIN inventory_items latest ON latest.id = (
+    SELECT i2.id
+    FROM inventory_items i2
+    WHERE i2.productId = p.id AND i2.isActive = 1
+    ORDER BY i2.createdAt DESC, i2.id DESC
+    LIMIT 1
+  )
+  WHERE p.isActive = 1
+`;
+
+const mapStockRow = (row) => ({
+  ...row,
+  stock: round2(row.stock)
+});
+
+/**
+ * Products whose live stock is positive but below the low-stock threshold.
+ * Stock is summed across every active batch so the alert reflects the product,
+ * not a single batch.
+ */
+export function listLowStockProducts({ threshold = 2 } = {}) {
+  const safeThreshold = Number.isFinite(Number(threshold)) && Number(threshold) > 0
+    ? Number(threshold)
+    : 2;
+
+  return db.prepare(`
+    ${STOCK_SUMMARY_SELECT}
+      AND COALESCE(stock.totalStock, 0) > 0
+      AND COALESCE(stock.totalStock, 0) < @threshold
+    ORDER BY stock ASC, p.name COLLATE NOCASE ASC
+  `).all({ threshold: safeThreshold }).map(mapStockRow);
+}
+
+/** Products whose live stock across all active batches is exactly zero. */
+export function listOutOfStockProducts() {
+  return db.prepare(`
+    ${STOCK_SUMMARY_SELECT}
+      AND COALESCE(stock.totalStock, 0) = 0
+    ORDER BY p.name COLLATE NOCASE ASC
+  `).all().map(mapStockRow);
+}
+
+function isoDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  // Use local calendar parts so "today" does not slip to yesterday in IST
+  // during the first UTC-offset hours of the day.
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Active batches expiring between today and the same day N months from now.
+ * Expired batches are intentionally excluded; the Expiry ledger covers those.
+ */
+export function listExpiringInventory({ from = new Date(), months = 3 } = {}) {
+  const start = isoDate(from) || isoDate(new Date());
+  const startDate = new Date(`${start}T00:00:00.000Z`);
+  const endDate = new Date(startDate);
+  endDate.setUTCMonth(endDate.getUTCMonth() + Math.max(1, Number(months) || 3));
+  const end = endDate.toISOString().slice(0, 10);
+
+  const rows = db.prepare(`
+    SELECT
+      i.id,
+      i.productId,
+      p.name,
+      COALESCE(p.category, '') AS category,
+      i.batchNumber,
+      i.expiryDate,
+      i.quantity AS stock,
+      i.purchasePrice AS unitPrice,
+      i.mrp,
+      i.sellingPrice,
+      i.discount,
+      i.gstPercentage,
+      i.supplier,
+      i.receivedAt,
+      i.createdAt,
+      i.updatedAt,
+      i.isActive
+    FROM inventory_items i
+    JOIN products p ON p.id = i.productId
+    WHERE i.isActive = 1
+      AND p.isActive = 1
+      AND i.expiryDate IS NOT NULL
+      AND TRIM(i.expiryDate) <> ''
+      AND date(i.expiryDate) >= date(@from)
+      AND date(i.expiryDate) <= date(@to)
+    ORDER BY date(i.expiryDate) ASC, p.name COLLATE NOCASE ASC
+  `).all({ from: start, to: end });
+
+  return rows;
+}
+
 /**
  * Update inventory metadata (never a blind stock overwrite) and optionally
  * apply an audited quantity adjustment when the caller sends a new stock value.

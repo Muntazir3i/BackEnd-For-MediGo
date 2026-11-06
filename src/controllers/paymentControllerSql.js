@@ -22,6 +22,8 @@ const statements = {
     FROM payments
     WHERE (@lastId IS NULL OR id < @lastId)
       AND (@invoice IS NULL OR invoice LIKE @invoice)
+      AND (@from IS NULL OR date >= @from)
+      AND (@to IS NULL OR date < @to)
     ORDER BY id DESC
     LIMIT 50
   `),
@@ -68,6 +70,20 @@ function normalizeInvoice(value) {
   return trimmed !== '' ? `%${trimmed}%` : null;
 }
 
+/**
+ * Turn inclusive YYYY-MM-DD bounds into the exclusive upper bound used by the
+ * SQL filters, so rows stored with a time component on the end date still match.
+ */
+function normalizeDateRange(from, to) {
+  const start = normalizeDate(from);
+  const end = normalizeDate(to);
+
+  return {
+    from: start,
+    to: end ? nextDay(end) : null
+  };
+}
+
 function addPayment(payment) {
   // 2. Use named parameters with fallbacks to avoid crashes if keys are missing/undefined
   statements.addPayment.run({
@@ -87,10 +103,11 @@ function findPaymentByInvoice(invoice) {
   return statements.findPaymentByInvoice.get(invoice);
 }
 
-function fetchAllPayments(invoice = '') {
+function fetchAllPayments(invoice = '', { from = '', to = '' } = {}) {
   return statements.fetchPaymentsPage.all({
     lastId: null,
-    invoice: normalizeInvoice(invoice)
+    invoice: normalizeInvoice(invoice),
+    ...normalizeDateRange(from, to)
   });
 }
 
@@ -123,14 +140,15 @@ function deletePayment(paymentId) {
   };
 }
 
-function loadMorePayments(lastId, invoice = '') {
+function loadMorePayments(lastId, invoice = '', { from = '', to = '' } = {}) {
   const numericId = Number(lastId);
 
   if (!Number.isFinite(numericId)) return [];
 
   return statements.fetchPaymentsPage.all({
     lastId: numericId,
-    invoice: normalizeInvoice(invoice)
+    invoice: normalizeInvoice(invoice),
+    ...normalizeDateRange(from, to)
   });
 }
 
