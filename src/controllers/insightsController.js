@@ -5,6 +5,7 @@
  * through the command palette.
  */
 import db from '../db/billPayment.js';
+import supplierDb from '../db/db.js';
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -24,8 +25,81 @@ function addMonths(date, count) {
   return new Date(date.getFullYear(), date.getMonth() + count, 1);
 }
 
+function addDays(date, count) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + count);
+}
+
 function round2(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+const FORM_TOKENS = new Set([
+  'TAB', 'TABLET', 'TABS', 'TABLETS',
+  'CAP', 'CAPSULE', 'CAPSULES',
+  'SYP', 'SYRUP',
+  'SUSP', 'SUSPENSION',
+  'INJ', 'INJECTION',
+  'DROP', 'DROPS',
+  'OINT', 'OINTMENT',
+  'CREAM', 'GEL', 'LOTION', 'SPRAY',
+  'INHALER', 'SACHET', 'POWDER', 'SOAP', 'SHAMPOO',
+  'NANOSHOT', 'MOUTHWASH', 'PATCH', 'SUPPOSITORY', 'GRANULES',
+]);
+
+const NOISE_TOKENS = new Set([
+  'TRANSPULES', 'TRANSPULE', 'TRANSPULS',
+  'NEW', 'ADVANCE', 'ADVANCED', 'SPECIAL', 'PACK', 'PACKS',
+]);
+
+function medicineGroupKey(name) {
+  const text = String(name || '')
+    .toUpperCase()
+    .replace(/NANO[\s-]*SHOT/g, ' NANOSHOT ')
+    .replace(/MOUTH[\s-]*WASH/g, ' MOUTHWASH ')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const forms = [];
+  const base = [];
+
+  for (const token of tokens) {
+    if (FORM_TOKENS.has(token)) forms.push(token);
+    else if (!NOISE_TOKENS.has(token)) base.push(token);
+  }
+
+  return `${base.join(' ')}|${forms.sort().join(' ')}`;
+}
+
+function groupPriceRows(rows) {
+  const groups = new Map();
+
+  for (const row of rows) {
+    const key = medicineGroupKey(row.name);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        quantity: 0,
+        amount: 0,
+        names: new Map()
+      });
+    }
+
+    const group = groups.get(key);
+    const quantity = Number(row.quantity) || 0;
+    const amount = Number(row.amount) || 0;
+
+    group.quantity += quantity;
+    group.amount += amount;
+    group.names.set(row.name, (group.names.get(row.name) || 0) + quantity);
+  }
+
+  return groups;
+}
+
+function pickGroupName(group) {
+  return [...group.names.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0]?.[0] || '';
 }
 
 const statements = {
@@ -145,6 +219,79 @@ const statements = {
     GROUP BY pi.productId
     ORDER BY quantity DESC
     LIMIT 6
+  `),
+  productPriceRows: db.prepare(`
+    SELECT
+      pi.productId,
+      p.name,
+      SUM(pi.quantity) AS quantity,
+      SUM(pi.quantity * pi.unitPrice) AS amount
+    FROM purchase_items pi
+    JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+    JOIN products p ON p.id = pi.productId
+    WHERE pb.status <> 'void' AND pi.productId IS NOT NULL
+      AND pb.date >= ? AND pb.date < ?
+    GROUP BY pi.productId
+  `),
+  outstandingBySupplier: db.prepare(`
+    SELECT supplierName, COALESCE(SUM(signedAmount), 0) AS net
+    FROM supplier_transactions
+    WHERE supplierName IS NOT NULL
+    GROUP BY supplierName
+  `),
+  frequentProducts: db.prepare(`
+    SELECT
+      MIN(pi.nameSnapshot) AS name,
+      COUNT(DISTINCT pi.purchaseBillId) AS bills,
+      COALESCE(SUM(pi.quantity), 0) AS quantity
+    FROM purchase_items pi
+    JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+    WHERE pb.status <> 'void'
+      AND pb.date >= ? AND pb.date < ?
+    GROUP BY COALESCE(pi.productId, UPPER(TRIM(pi.nameSnapshot)))
+    ORDER BY bills DESC, quantity DESC
+    LIMIT 6
+  `),
+  missingData: db.prepare(`
+    SELECT
+      SUM(CASE WHEN pi.batchNumberSnapshot IS NULL OR TRIM(pi.batchNumberSnapshot) = '' THEN 1 ELSE 0 END) AS missingBatch,
+      SUM(CASE WHEN pi.expiryDateSnapshot IS NULL OR TRIM(pi.expiryDateSnapshot) = '' THEN 1 ELSE 0 END) AS missingExpiry
+    FROM purchase_items pi
+    JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+    WHERE pb.status <> 'void'
+  `),
+  activeProductNames: db.prepare(`
+    SELECT name FROM products WHERE isActive = 1
+  `),
+  reorderCandidates: db.prepare(`
+    WITH recent AS (
+      SELECT pi.productId, SUM(pi.quantity) AS quantity
+      FROM purchase_items pi
+      JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+      WHERE pb.status <> 'void' AND pi.productId IS NOT NULL
+        AND pb.date >= ? AND pb.date < ?
+      GROUP BY pi.productId
+    )
+    SELECT
+      p.name,
+      ps.stockOnHand,
+      r.quantity AS recentQuantity,
+      r.quantity / 3.0 AS averageMonthly
+    FROM recent r
+    JOIN products p ON p.id = r.productId
+    JOIN product_stock ps ON ps.productId = p.id
+    WHERE p.isActive = 1
+      AND r.quantity > 0
+      AND ps.stockOnHand <= (r.quantity / 3.0) * 1.5
+    ORDER BY ((r.quantity / 3.0) - ps.stockOnHand) DESC
+    LIMIT 6
+  `)
+};
+
+const supplierStatements = {
+  balances: supplierDb.prepare(`
+    SELECT supplierName, supplierBalance
+    FROM suppliers
   `)
 };
 
@@ -170,6 +317,9 @@ function getInsights(req, res) {
   const lastYearMonthStart = new Date(now.getFullYear() - 1, now.getMonth(), 1);
   const lastYearMonthEnd = addMonths(lastYearMonthStart, 1);
   const recentStart = isoDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 90));
+  const today = isoDate(now);
+  const last90Start = isoDate(addDays(now, -90));
+  const previous90Start = isoDate(addDays(now, -180));
 
   const from = isoDate(windowStart);
   const to = isoDate(windowEnd);
@@ -224,6 +374,97 @@ function getInsights(req, res) {
   }));
 
   const lastYearSummary = statements.lastYearSummary.get(lastYearFrom, lastYearTo);
+  const reorderCandidates = statements.reorderCandidates.all(last90Start, today);
+
+  const recentPriceGroups = groupPriceRows(
+    statements.productPriceRows.all(last90Start, today)
+  );
+  const previousPriceGroups = groupPriceRows(
+    statements.productPriceRows.all(previous90Start, last90Start)
+  );
+  const priceMoves = [];
+
+  for (const [key, recent] of recentPriceGroups.entries()) {
+    const previous = previousPriceGroups.get(key);
+    if (!previous || recent.quantity <= 0 || previous.quantity <= 0) continue;
+
+    const previousPrice = previous.amount / previous.quantity;
+    const recentPrice = recent.amount / recent.quantity;
+    if (!(previousPrice > 0)) continue;
+
+    const matchedNames = [...new Set([
+      ...recent.names.keys(),
+      ...previous.names.keys()
+    ])];
+
+    priceMoves.push({
+      name: pickGroupName(recent) || pickGroupName(previous),
+      matchedNames,
+      previousPrice: round2(previousPrice),
+      recentPrice: round2(recentPrice),
+      changePercent: round2(((recentPrice - previousPrice) / previousPrice) * 100)
+    });
+  }
+
+  priceMoves.sort((a, b) => b.changePercent - a.changePercent);
+  priceMoves.splice(6);
+
+  const previousMonthStart = addMonths(currentMonthStart, -1);
+  const nextMonthStart = addMonths(currentMonthStart, 1);
+  const currentPurchases = statements.purchaseTotals.get(
+    isoDate(currentMonthStart),
+    isoDate(nextMonthStart)
+  );
+  const previousPurchases = statements.purchaseTotals.get(
+    isoDate(previousMonthStart),
+    isoDate(currentMonthStart)
+  );
+  const currentPayments = statements.paymentTotals.get(
+    isoDate(currentMonthStart),
+    isoDate(nextMonthStart)
+  );
+  const previousPayments = statements.paymentTotals.get(
+    isoDate(previousMonthStart),
+    isoDate(currentMonthStart)
+  );
+
+  const currentPurchaseAmount = Number(currentPurchases.amount) || 0;
+  const previousPurchaseAmount = Number(previousPurchases.amount) || 0;
+  const currentPaymentAmount = Number(currentPayments.amount) || 0;
+  const previousPaymentAmount = Number(previousPayments.amount) || 0;
+
+  const openingBySupplier = new Map(
+    supplierStatements.balances.all().map((row) => [
+      row.supplierName,
+      Number(row.supplierBalance) || 0
+    ])
+  );
+
+  const outstandingSuppliers = statements.outstandingBySupplier
+    .all()
+    .map((row) => ({
+      supplierName: row.supplierName,
+      balance: round2((openingBySupplier.get(row.supplierName) || 0) + (Number(row.net) || 0))
+    }))
+    .filter((row) => row.balance > 0)
+    .sort((a, b) => b.balance - a.balance);
+
+  const totalOutstanding = round2(
+    outstandingSuppliers.reduce((sum, row) => sum + row.balance, 0)
+  );
+
+  const missingData = statements.missingData.get();
+  const productNameGroups = new Map();
+
+  for (const { name } of statements.activeProductNames.all()) {
+    const key = medicineGroupKey(name);
+    if (!productNameGroups.has(key)) productNameGroups.set(key, []);
+    productNameGroups.get(key).push(name);
+  }
+
+  const duplicateGroups = [...productNameGroups.values()]
+    .filter((names) => new Set(names).size > 1)
+    .sort((a, b) => b.length - a.length);
 
   return res.status(200).json({
     generatedAt: new Date().toISOString(),
@@ -256,6 +497,19 @@ function getInsights(req, res) {
       salesCount: Number(sales.count) || 0,
       creditNoteCount: Number(creditNotes.count) || 0
     },
+    currentMonth: {
+      label: monthLabel(currentMonthStart),
+      purchases: round2(currentPurchaseAmount),
+      previousPurchases: round2(previousPurchaseAmount),
+      payments: round2(currentPaymentAmount),
+      previousPayments: round2(previousPaymentAmount),
+      purchaseChangePercent: previousPurchaseAmount
+        ? round2(((currentPurchaseAmount - previousPurchaseAmount) / previousPurchaseAmount) * 100)
+        : null,
+      paymentChangePercent: previousPaymentAmount
+        ? round2(((currentPaymentAmount - previousPaymentAmount) / previousPaymentAmount) * 100)
+        : null
+    },
     averages: {
       monthlyPurchases: round2(totalPurchases / monthCount),
       monthlyPayments: round2(totalPayments / monthCount),
@@ -287,6 +541,22 @@ function getInsights(req, res) {
       sales: round2(month.sales),
       creditNotes: round2(month.creditNotes)
     })),
+    outstanding: {
+      total: totalOutstanding,
+      supplierCount: outstandingSuppliers.length,
+      suppliers: outstandingSuppliers.slice(0, 6)
+    },
+    frequentProducts: statements.frequentProducts.all(from, to).map((row) => ({
+      name: row.name,
+      bills: Number(row.bills) || 0,
+      quantity: round2(row.quantity)
+    })),
+    dataQuality: {
+      duplicateGroups: duplicateGroups.length,
+      duplicateExamples: duplicateGroups.slice(0, 3).map((names) => names.slice(0, 4)),
+      missingBatch: Number(missingData.missingBatch) || 0,
+      missingExpiry: Number(missingData.missingExpiry) || 0
+    },
     topSuppliers,
     topProducts: statements.topProducts.all(from, to).map((row) => ({
       name: row.name,
@@ -300,7 +570,14 @@ function getInsights(req, res) {
         quantity: round2(row.quantity),
         orders: Number(row.orders) || 0,
         lastPurchased: row.lastPurchased
-      }))
+      })),
+    priceMoves,
+    reorderCandidates: reorderCandidates.map((row) => ({
+      name: row.name,
+      stockOnHand: round2(row.stockOnHand),
+      recentQuantity: round2(row.recentQuantity),
+      averageMonthly: round2(row.averageMonthly)
+    }))
   });
 }
 
