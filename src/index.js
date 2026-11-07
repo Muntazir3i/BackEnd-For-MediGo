@@ -17,6 +17,7 @@ import invoiceRoutes from './routes/invoiceRoutes.js'
 import salesRoutes from './routes/salesRouter.js'
 import expiryRoutes from './routes/expiryRouter.js'
 import creditNoteRoutes from './routes/creditNoteRouter.js'
+import insightsRoutes from './routes/insightsRouter.js'
 import cors from 'cors'
 import billScanRouter from './routes/billScan.js'
 import 'dotenv/config'
@@ -42,6 +43,7 @@ app.use("/api/invoice", invoiceRoutes);
 app.use("/api/sales", salesRoutes);
 app.use("/api/expiry", expiryRoutes);
 app.use("/api/credit-notes", creditNoteRoutes);
+app.use("/api/insights", insightsRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
