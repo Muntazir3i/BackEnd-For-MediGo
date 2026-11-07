@@ -12,6 +12,7 @@ This backend is optimized for **offline-first performance**, **fast reads**, and
 - **ES Modules (import/export)** – Modern JavaScript
 - **CORS** – API access from frontend
 - **dotenv** – Environment variable management
+- **Google Gemini** – Supplier bill image extraction
 
 ---
 
@@ -21,6 +22,7 @@ This backend is optimized for **offline-first performance**, **fast reads**, and
 ✔ **Inventory management** – Add/update medicines, stock in/out tracking  
 ✔ **Ledger system** – Combined billing + payments history  
 ✔ **Customers & suppliers** management  
+✔ **Supplier bill image extraction** – upload a printed bill and prefill the purchase form with Gemini  
 ✔ **Structured controllers, models, and routes**  
 ✔ **SQLite database** (local) with the ability to migrate to MongoDB easily  
 ✔ **Fast API responses** with minimal overhead  
@@ -57,9 +59,12 @@ npm install
 ### 3. Set environment variables
 Create a `.env` file:
 ```
-PORT=5000
 DB_PATH=./db/mediGo.db
+GEMINI_API_KEY=your-google-ai-studio-key
+GEMINI_MODEL=gemini-3.6-flash
 ```
+
+`GEMINI_API_KEY` is required for supplier bill image extraction. `GEMINI_MODEL` is optional and defaults to `gemini-3.6-flash`.
 
 ### 4. Start the server
 ```bash
@@ -68,8 +73,49 @@ npm start
 
 The API should now be live at:
 ```
-http://localhost:5000
+http://localhost:8008
 ```
+
+The backend port is currently set in `src/index.js`.
+
+---
+
+## 🧾 Supplier Bill Image Extraction
+
+The Add page can upload a photo of a supplier bill and prefill the purchase form.
+
+- Endpoint: `POST /api/bills/extract`
+- Body: `{ base64, mimeType }`
+- Accepted image types: JPG, PNG, WebP
+- The frontend limits uploads to 8 MB; the backend accepts up to 14 MB decoded.
+- Extraction is powered by the **Gemini API** using the prompt and JSON schema in `src/routes/billScan.js`.
+- Requires `GEMINI_API_KEY` in `.env` and an internet connection.
+
+Returned fields:
+
+```json
+{
+  "invoice": "",
+  "date": "",
+  "supplierName": "",
+  "supplierDrugLn": "",
+  "supplierContact": "",
+  "products": [
+    {
+      "name": "",
+      "batchNumber": "",
+      "expiryDate": "",
+      "stock": 0,
+      "unitPrice": 0,
+      "mrp": 0,
+      "discount": 0,
+      "gstPercentage": 0
+    }
+  ]
+}
+```
+
+Dates are returned as `YYYY-MM-DD`. Expiry dates use day `01` when the bill prints only a month and year. Every extracted value is reviewed in the form before saving.
 
 ---
 
@@ -89,6 +135,11 @@ DELETE /inventory/:id
 POST   /bills
 GET    /bills
 GET    /bills/:id
+```
+
+### **Bill image extraction**
+```
+POST   /api/bills/extract
 ```
 
 ### **Payments**
@@ -127,7 +178,7 @@ You can use tools like:
 
 Example request:
 ```bash
-curl http://localhost:5000/inventory
+curl http://localhost:8008/inventory
 ```
 
 ---
