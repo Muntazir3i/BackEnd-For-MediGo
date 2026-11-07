@@ -3,6 +3,8 @@ import './setup/createInventorySchema.js'
 import './setup/createSupplierTable.js'
 import './setup/createBillsPaymnetTable.js'
 import './setup/createExpirySchema.js'
+import './setup/createCreditNoteSchema.js'
+import './setup/createLedgerSchema.js'
 
 import express from 'express'
 import supplierRoutes from './routes/supplierRouter.js'
@@ -14,6 +16,7 @@ import searchMedicineRouterSql from './routes/searchMedicineRouter.js'
 import invoiceRoutes from './routes/invoiceRoutes.js'
 import salesRoutes from './routes/salesRouter.js'
 import expiryRoutes from './routes/expiryRouter.js'
+import creditNoteRoutes from './routes/creditNoteRouter.js'
 import cors from 'cors'
 import billScanRouter from './routes/billScan.js'
 import 'dotenv/config'
@@ -38,6 +41,7 @@ app.use('/api/searchMedicine', searchMedicineRouterSql)
 app.use("/api/invoice", invoiceRoutes);
 app.use("/api/sales", salesRoutes);
 app.use("/api/expiry", expiryRoutes);
+app.use("/api/credit-notes", creditNoteRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
