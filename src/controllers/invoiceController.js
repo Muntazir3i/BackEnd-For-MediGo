@@ -7,6 +7,7 @@
  */
 import {
   createSaleInvoice,
+  deleteSaleInvoice,
   getSaleInvoice,
   listInvoices,
   voidSaleInvoice
@@ -57,6 +58,25 @@ export const getInvoice = (req, res) => {
   } catch (error) {
     console.error('Error fetching invoice:', error);
     sendError(res, error, 'Error fetching invoice');
+  }
+};
+
+export const deleteInvoice = (req, res) => {
+  try {
+    const result = deleteSaleInvoice(req.params.id);
+
+    if (!result.deleted) {
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Invoice deleted successfully',
+      invoice: result.invoice
+    });
+  } catch (error) {
+    console.error('Error deleting invoice:', error);
+    sendError(res, error, 'Error deleting invoice');
   }
 };
 

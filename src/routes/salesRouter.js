@@ -3,6 +3,7 @@ import {
   getInvoice,
   getInvoicesByDateAndCustomer,
   saveInvoice,
+  deleteInvoice,
   voidInvoice
 } from '../controllers/invoiceController.js';
 
@@ -16,6 +17,9 @@ router.get('/invoices', getInvoicesByDateAndCustomer);
 
 // Fetch one invoice with its full snapshot
 router.get('/invoices/:id', getInvoice);
+
+// Delete a sale and restore its stock
+router.delete('/invoices/:id', deleteInvoice);
 
 // Void a sale and restore its stock
 router.post('/invoices/:id/void', voidInvoice);

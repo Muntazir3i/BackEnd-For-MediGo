@@ -3,6 +3,7 @@ import {
     saveInvoice,
     getInvoicesByDateAndCustomer,
     getInvoice,
+    deleteInvoice,
     voidInvoice
 } from "../controllers/invoiceController.js";
 
@@ -16,6 +17,9 @@ router.get("/search", getInvoicesByDateAndCustomer);
 
 // Fetch one invoice with its immutable line snapshots
 router.get("/:id", getInvoice);
+
+// Delete a customer invoice and restore its stock
+router.delete("/:id", deleteInvoice);
 
 // Void a sale and restore stock
 router.post("/:id/void", voidInvoice);

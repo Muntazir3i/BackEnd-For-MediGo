@@ -309,7 +309,13 @@ export function createSaleInvoice(payload = {}) {
   return transaction.immediate();
 }
 
-export function listInvoices({ date = '', customer = '', invoice = '', limit = 500 } = {}) {
+export function listInvoices({
+  date = '',
+  customer = '',
+  invoice = '',
+  limit = 500,
+  includeVoided = false
+} = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 500, 1), 1000);
   const dateFilter = date && String(date).trim() !== '' ? String(date).trim() : null;
   const customerFilter = customer && String(customer).trim() !== ''
@@ -325,12 +331,14 @@ export function listInvoices({ date = '', customer = '', invoice = '', limit = 5
     WHERE (@date IS NULL OR substr(createdAt, 1, 10) = @date)
       AND (@customer IS NULL OR customerName LIKE @customer)
       AND (@invoice IS NULL OR invoiceNumber LIKE @invoice)
+      AND (@includeVoided = 1 OR status <> 'voided')
     ORDER BY createdAt DESC, id DESC
     LIMIT ${safeLimit}
   `).all({
     date: dateFilter,
     customer: customerFilter,
-    invoice: invoiceFilter
+    invoice: invoiceFilter,
+    includeVoided: includeVoided ? 1 : 0
   });
 
   if (headers.length === 0) return [];
@@ -405,6 +413,53 @@ export function voidSaleInvoice(id) {
     statements.voidInvoice.run({ id: invoiceId });
 
     return { voided: true, invoice: loadInvoiceById(invoiceId) };
+  });
+
+  return transaction.immediate();
+}
+
+/**
+ * Delete a customer invoice from the active sales list.
+ *
+ * The row is retained as a voided record for audit, but each line's exact
+ * inventory item and quantity is returned to stock before it disappears from
+ * invoice searches. Legacy invoices never deducted stock, so they are removed
+ * without a stock movement.
+ */
+export function deleteSaleInvoice(id) {
+  const invoiceId = Number(id);
+
+  if (!Number.isSafeInteger(invoiceId) || invoiceId <= 0) {
+    throw validationError('Invalid invoice id');
+  }
+
+  const transaction = db.transaction(() => {
+    const invoice = statements.invoiceById.get(invoiceId);
+
+    if (!invoice) return { deleted: false, invoice: null };
+    if (invoice.status === 'voided') {
+      throw conflictError('This invoice has already been deleted.');
+    }
+
+    if (invoice.stockDeducted === 1) {
+      const items = statements.itemsByInvoice.all(invoiceId);
+
+      for (const item of items) {
+        if (!item.inventoryItemId) continue;
+        applyStockMovement({
+          inventoryItemId: item.inventoryItemId,
+          delta: item.quantity,
+          type: 'void',
+          referenceType: 'invoice',
+          referenceId: invoiceId,
+          note: `Invoice ${invoice.invoiceNumber} deleted`
+        });
+      }
+    }
+
+    statements.voidInvoice.run({ id: invoiceId });
+
+    return { deleted: true, invoice: loadInvoiceById(invoiceId) };
   });
 
   return transaction.immediate();
