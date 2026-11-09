@@ -46,11 +46,11 @@ const statements = {
   insertPurchaseItem: db.prepare(`
     INSERT INTO purchase_items (
       purchaseBillId, productId, inventoryItemId, nameSnapshot,
-      batchNumberSnapshot, expiryDateSnapshot, quantity, unitPrice, mrp,
+      batchNumberSnapshot, expiryDateSnapshot, quantity, free, unitPrice, mrp,
       discount, gstPercentage, supplierSnapshot, categorySnapshot, createdAt
     ) VALUES (
       @purchaseBillId, @productId, @inventoryItemId, @nameSnapshot,
-      @batchNumberSnapshot, @expiryDateSnapshot, @quantity, @unitPrice, @mrp,
+      @batchNumberSnapshot, @expiryDateSnapshot, @quantity, @free, @unitPrice, @mrp,
       @discount, @gstPercentage, @supplierSnapshot, @categorySnapshot, datetime('now')
     )
   `),
@@ -62,6 +62,7 @@ const statements = {
         batchNumberSnapshot = @batchNumberSnapshot,
         expiryDateSnapshot = @expiryDateSnapshot,
         quantity = @quantity,
+        free = @free,
         unitPrice = @unitPrice,
         mrp = @mrp,
         discount = @discount,
@@ -142,12 +143,14 @@ function normalizePurchaseLine(product = {}) {
   if (!name) throw validationError('Every medicine line needs a name');
 
   const quantity = toNumber(product.stock ?? product.quantity);
+  const free = toNumber(product.free);
   const unitPrice = toNumber(product.unitPrice ?? product.purchasePrice);
   const mrp = toNumber(product.mrp);
   const discount = toNumber(product.discount);
   const gstPercentage = toNumber(product.gstPercentage ?? product.gst);
 
   if (quantity <= 0) throw validationError(`Quantity for ${name} must be greater than 0`);
+  if (free < 0) throw validationError(`Free quantity for ${name} cannot be negative`);
   if (unitPrice < 0 || mrp < 0 || discount < 0 || gstPercentage < 0) {
     throw validationError(`Rate, MRP, discount and GST for ${name} cannot be negative`);
   }
@@ -163,6 +166,7 @@ function normalizePurchaseLine(product = {}) {
     batchNumber: cleanDisplay(product.batchNumber),
     expiryDate: cleanDisplay(product.expiryDate),
     quantity,
+    free: round2(free),
     unitPrice,
     mrp,
     discount,
@@ -213,6 +217,7 @@ function mapPurchaseItem(row, saltsByProduct = new Map()) {
     expiryDate: row.expiryDateSnapshot,
     stock: row.quantity,
     quantity: row.quantity,
+    free: row.free ?? 0,
     unitPrice: row.unitPrice,
     mrp: row.mrp,
     discount: row.discount,
@@ -293,6 +298,7 @@ export function addBill(billData = {}) {
         batchNumberSnapshot: line.batchNumber,
         expiryDateSnapshot: line.expiryDate,
         quantity: line.quantity,
+        free: line.free,
         unitPrice: line.unitPrice,
         mrp: line.mrp,
         discount: line.discount,
@@ -303,11 +309,11 @@ export function addBill(billData = {}) {
 
       applyStockMovement({
         inventoryItemId: item.id,
-        delta: line.quantity,
+        delta: round2(line.quantity + line.free),
         type: 'purchase',
         referenceType: 'purchase_bill',
         referenceId: billId,
-        note: `Purchase bill ${invoice}`
+        note: `Purchase bill ${invoice}${line.free > 0 ? ` (+${line.free} free)` : ''}`
       });
     }
 
@@ -376,7 +382,10 @@ export function updateBill(billId, billData = {}) {
       });
 
       if (previous.inventoryItemId === target.id) {
-        const delta = round2(line.quantity - previous.quantity);
+        const previousFree = toNumber(previous.free);
+        const delta = round2(
+          (line.quantity + line.free) - (previous.quantity + previousFree)
+        );
         if (delta !== 0) {
           applyStockMovement({
             inventoryItemId: target.id,
@@ -384,14 +393,15 @@ export function updateBill(billId, billData = {}) {
             type: 'purchase_edit',
             referenceType: 'purchase_bill',
             referenceId: id,
-            note: `Quantity changed from ${previous.quantity} to ${line.quantity}`
+            note: `Quantity changed from ${previous.quantity}${previousFree ? ` + ${previousFree} free` : ''} to ${line.quantity}${line.free ? ` + ${line.free} free` : ''}`
           });
         }
       } else {
         // Batch/name changed: return the old units first, then receive the new ones.
+        const previousFree = toNumber(previous.free);
         applyStockMovement({
           inventoryItemId: previous.inventoryItemId,
-          delta: -previous.quantity,
+          delta: -round2(previous.quantity + previousFree),
           type: 'purchase_edit',
           referenceType: 'purchase_bill',
           referenceId: id,
@@ -400,7 +410,7 @@ export function updateBill(billId, billData = {}) {
 
         applyStockMovement({
           inventoryItemId: target.id,
-          delta: line.quantity,
+          delta: round2(line.quantity + line.free),
           type: 'purchase_edit',
           referenceType: 'purchase_bill',
           referenceId: id,
@@ -417,6 +427,7 @@ export function updateBill(billId, billData = {}) {
         batchNumberSnapshot: line.batchNumber,
         expiryDateSnapshot: line.expiryDate,
         quantity: line.quantity,
+        free: line.free,
         unitPrice: line.unitPrice,
         mrp: line.mrp,
         discount: line.discount,
@@ -550,7 +561,11 @@ export function deleteBill(billId) {
       if (!item.inventoryItemId) continue;
       requiredByInventory.set(
         item.inventoryItemId,
-        round2((requiredByInventory.get(item.inventoryItemId) ?? 0) + item.quantity)
+        round2(
+          (requiredByInventory.get(item.inventoryItemId) ?? 0) +
+            item.quantity +
+            (Number(item.free) || 0)
+        )
       );
     }
 

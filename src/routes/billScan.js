@@ -27,6 +27,7 @@ const billSchema = {
           batchNumber: { type: 'string' },
           expiryDate: { type: 'string' },
           stock: { type: 'number' },
+          free: { type: 'number' },
           unitPrice: { type: 'number' },
           mrp: { type: 'number' },
           discount: { type: 'number' },
@@ -37,6 +38,7 @@ const billSchema = {
           'batchNumber',
           'expiryDate',
           'stock',
+          'free',
           'unitPrice',
           'mrp',
           'discount',
@@ -97,6 +99,7 @@ Products:
 - "name": medicine/product name.
 - "batchNumber": batch or lot number.
 - "stock": quantity/qty/packs/boxes/strips/units for that line item.
+- "free": free/bonus quantity for that line item; use 0 if absent.
 - "unitPrice": purchase rate per unit or pack; exclude GST if it is shown separately.
 - "mrp": MRP.
 - "discount": discount percentage; use 0 if absent.

@@ -106,6 +106,7 @@ Returned fields:
       "batchNumber": "",
       "expiryDate": "",
       "stock": 0,
+      "free": 0,
       "unitPrice": 0,
       "mrp": 0,
       "discount": 0,

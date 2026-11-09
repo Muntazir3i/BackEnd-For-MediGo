@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   batchNumberSnapshot TEXT,
   expiryDateSnapshot TEXT,
   quantity REAL NOT NULL,
+  free REAL NOT NULL DEFAULT 0,
   unitPrice REAL NOT NULL,
   mrp REAL NOT NULL,
   discount REAL NOT NULL DEFAULT 0,
@@ -180,6 +181,12 @@ CREATE INDEX IF NOT EXISTS idx_invoice_items_product ON invoice_items(productId)
 CREATE INDEX IF NOT EXISTS idx_stock_movements_item ON stock_movements(inventoryItemId);
 CREATE INDEX IF NOT EXISTS idx_stock_movements_reference ON stock_movements(referenceType, referenceId);
 `);
+
+// Existing databases were created before the free-quantity field was added.
+const purchaseItemColumns = db.prepare('PRAGMA table_info(purchase_items)').all();
+if (!purchaseItemColumns.some((column) => column.name === 'free')) {
+  db.exec('ALTER TABLE purchase_items ADD COLUMN free REAL NOT NULL DEFAULT 0');
+}
 
 // Archived batches (isActive = 0) must not count towards live stock.
 db.exec('DROP VIEW IF EXISTS product_stock');
