@@ -75,52 +75,105 @@ router.post('/api/bills/extract', async (req, res) => {
           role: 'user',
           parts: [
             {
-              text: `
-Extract data from this pharmacy purchase bill image.
+              text: `Extract data from this pharmacy purchase bill image.
 
 Follow the response schema exactly. Return only valid JSON—no explanation, Markdown, or extra fields.
 
-Invoice:
+INVOICE:
 - Extract the bill or invoice number. It may be labelled Bill No, Bill Number, Invoice No, Invoice Number, Inv No, or similar.
 - Put this value in "invoice".
-- If it is missing or unreadable, use "".
+- If missing or unreadable, use "".
 
-Bill date:
-- Extract the invoice/bill date only, not the expiry date.
-- Format "date" as YYYY-MM-DD when clearly readable.
+BILL DATE:
+- Extract the invoice/bill date only, not the expiry or manufacture date.
+- Format as YYYY-MM-DD when clearly readable.
 - If missing, incomplete, or ambiguous, use "".
 
-Supplier:
+SUPPLIER:
 - Extract supplier name, drug licence number, and contact number only if clearly visible.
 - Use "" for missing or unreadable values.
 
-Products:
-- Extract every product line item from the bill.
-- "name": medicine/product name.
-- "batchNumber": batch or lot number.
-- "stock": quantity/qty/packs/boxes/strips/units for that line item.
-- "free": free/bonus quantity for that line item; use 0 if absent.
-- "unitPrice": purchase rate per unit or pack; exclude GST if it is shown separately.
+PRODUCTS:
+Extract every product line item from the bill.
+
+For each product, extract:
+
+- "name": Extract ONLY the actual medicine/product brand name and its strength.
+  
+  PRODUCT NAME CLEANING RULES:
+  - Remove dosage-form words such as Tab, Tablet, Tablets, Cap, Caps, Capsule, Capsules, Cream, Gargles, Syrup, Suspension, Drops, Injection, Ointment, Gel, Lotion, and similar descriptive terms.
+  - Remove text enclosed in angle brackets, such as <Lot>.
+  - Remove packaging and manufacturing descriptors.
+  - Remove unnecessary prefixes, suffixes, and descriptive information.
+  - Preserve the actual brand/product name.
+  - Preserve medicine strength, including mg, mcg, g, ml, IU, and similar units.
+  - Do not remove numbers that are part of the actual brand name or strength.
+  - Do not replace brand names with generic ingredient names.
+  - Do not include dosage-form descriptions in the final name.
+  - If the actual product name cannot be confidently identified, use "".
+
+  Examples:
+  - "Dolo 650 Tab" -> "Dolo 650"
+  - "Pan 40 Tablets" -> "Pan 40"
+  - "Augmentin 625 Cap" -> "Augmentin 625"
+  - "ABC 500mg Capsules" -> "ABC 500mg"
+  - "XYZ 10mg Cream <Lot>" -> "XYZ 10mg"
+
+- "batchNumber": Batch or lot number.
+- "stock": Quantity/qty/packs/boxes/strips/units for that line item.
+- "free": Free or bonus quantity. Use 0 if absent.
+- "unitPrice": Purchase rate per unit or pack, excluding GST if shown separately.
 - "mrp": MRP.
-- "discount": discount percentage; use 0 if absent.
-- "gstPercentage": total GST percentage; use 0 if absent.
+- "discount": Discount percentage. Use 0 if absent.
+- "gstPercentage": Total GST percentage. Use 0 if absent.
+- "expiryDate": Expiry date strictly formatted as YYYY-MM-DD.
 
-Expiry dates:
-- Store "expiryDate" strictly as YYYY-MM-DD.
-- Bills usually show only month and year. Always use 01 as the day.
-- For example:
-  - 04/27 → 2027-04-01
-  - 05/2026 → 2026-05-01
-  - MAY-2026 → 2026-05-01
-- Do not use manufacture dates as expiry dates.
-- If the expiry date is missing or unreadable, use "".
+EXPIRY DATES:
+Bills usually show only month and year. Always use 01 as the day.
 
-Accuracy:
+Examples:
+- 04/27 -> 2027-04-01
+- 05/2026 -> 2026-05-01
+- MAY-2026 -> 2026-05-01
+
+Do not use manufacture dates as expiry dates.
+If expiry date is missing or unreadable, use "".
+
+ACCURACY RULES:
 - Never invent values.
-- Use "" for unreadable text.
+- Use "" for unreadable or missing text values.
 - Use 0 for unreadable or absent numeric values.
 - Return numeric values as numbers, without currency symbols or commas.
-`,
+- Extract every visible product line. Do not skip products.
+- Do not merge separate product lines.
+- Do not mistake batch numbers, HSN codes, or invoice references for product names.
+- Preserve the original product order.
+- Apply product name cleaning ONLY to the name field.
+
+RESPONSE SCHEMA:
+
+{
+  "invoice": "",
+  "date": "",
+  "supplier": {
+    "name": "",
+    "drugLicence": "",
+    "contact": ""
+  },
+  "products": [
+    {
+      "name": "",
+      "batchNumber": "",
+      "stock": 0,
+      "free": 0,
+      "unitPrice": 0,
+      "mrp": 0,
+      "discount": 0,
+      "gstPercentage": 0,
+      "expiryDate": ""
+    }
+  ]
+}`,
             },
             {
               inlineData: {

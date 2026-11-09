@@ -31,6 +31,8 @@ export const INVENTORY_SELECT = `
     i.sellingPrice,
     i.discount,
     i.gstPercentage,
+    i.unitsPerPack,
+    i.unitLabel,
     i.supplier,
     i.billNumber,
     i.receivedAt,
@@ -75,16 +77,23 @@ const statements = {
   inventoryByProductBatch: db.prepare(`
     SELECT * FROM inventory_items WHERE productId = ? AND batchKey = ?
   `),
+  latestPackMetadataByProduct: db.prepare(`
+    SELECT unitsPerPack, unitLabel
+    FROM inventory_items
+    WHERE productId = ? AND unitsPerPack > 1
+    ORDER BY updatedAt DESC, id DESC
+    LIMIT 1
+  `),
   inventoryById: db.prepare('SELECT * FROM inventory_items WHERE id = ?'),
   insertInventory: db.prepare(`
     INSERT INTO inventory_items (
       productId, batchNumber, batchKey, expiryDate, quantity, purchasePrice,
-      mrp, sellingPrice, discount, gstPercentage, supplier, supplierId,
-      billNumber, receivedAt, isActive
+      mrp, sellingPrice, discount, gstPercentage, unitsPerPack, unitLabel,
+      supplier, supplierId, billNumber, receivedAt, isActive
     ) VALUES (
       @productId, @batchNumber, @batchKey, @expiryDate, @quantity, @purchasePrice,
-      @mrp, @sellingPrice, @discount, @gstPercentage, @supplier, @supplierId,
-      @billNumber, @receivedAt, 1
+      @mrp, @sellingPrice, @discount, @gstPercentage, @unitsPerPack, @unitLabel,
+      @supplier, @supplierId, @billNumber, @receivedAt, 1
     )
   `),
   updateInventoryMetadata: db.prepare(`
@@ -97,6 +106,8 @@ const statements = {
         sellingPrice = COALESCE(@sellingPrice, sellingPrice),
         discount = COALESCE(@discount, discount),
         gstPercentage = COALESCE(@gstPercentage, gstPercentage),
+        unitsPerPack = CASE WHEN @unitsPerPack IS NULL THEN unitsPerPack ELSE @unitsPerPack END,
+        unitLabel = CASE WHEN @unitLabel IS NULL THEN unitLabel ELSE @unitLabel END,
         supplier = CASE WHEN @supplier IS NULL THEN supplier ELSE @supplier END,
         billNumber = CASE WHEN @billNumber IS NULL THEN billNumber ELSE @billNumber END,
         receivedAt = COALESCE(@receivedAt, receivedAt),
@@ -111,6 +122,15 @@ const statements = {
   `),
   deactivateInventory: db.prepare(`
     UPDATE inventory_items SET isActive = 0, updatedAt = datetime('now') WHERE id = ?
+  `),
+  propagatePackMetadata: db.prepare(`
+    UPDATE inventory_items
+    SET unitsPerPack = @unitsPerPack,
+        unitLabel = COALESCE(@unitLabel, unitLabel),
+        updatedAt = datetime('now')
+    WHERE productId = @productId
+      AND id <> @id
+      AND (unitsPerPack IS NULL OR unitsPerPack <= 1)
   `),
   insertMovement: db.prepare(`
     INSERT INTO stock_movements (
@@ -206,10 +226,15 @@ export function resolveInventoryItem(productId, data = {}) {
   const supplier = data.supplier === undefined ? null : cleanDisplay(data.supplier);
   const billNumber = data.billNumber === undefined ? null : cleanDisplay(data.billNumber);
   const receivedAt = data.receivedAt === undefined ? null : cleanDisplay(data.receivedAt);
+  const nextUnitsPerPack = data.unitsPerPack === undefined
+    ? null
+    : Math.max(1, toNumber(data.unitsPerPack, 1));
+  const nextUnitLabel = data.unitLabel === undefined ? null : cleanDisplay(data.unitLabel);
 
   let item = statements.inventoryByProductBatch.get(productId, batchKey);
 
   if (!item) {
+    const inheritedPack = statements.latestPackMetadataByProduct.get(productId);
     const result = statements.insertInventory.run({
       productId,
       batchNumber,
@@ -221,6 +246,8 @@ export function resolveInventoryItem(productId, data = {}) {
       sellingPrice: sellingPrice ?? 0,
       discount: discount ?? 0,
       gstPercentage: gstPercentage ?? 0,
+      unitsPerPack: nextUnitsPerPack ?? inheritedPack?.unitsPerPack ?? 1,
+      unitLabel: nextUnitLabel ?? inheritedPack?.unitLabel ?? null,
       supplier,
       supplierId: toNumberOrNull(data.supplierId),
       billNumber,
@@ -238,6 +265,8 @@ export function resolveInventoryItem(productId, data = {}) {
       sellingPrice,
       discount,
       gstPercentage,
+      unitsPerPack: nextUnitsPerPack,
+      unitLabel: nextUnitLabel,
       supplier,
       billNumber,
       receivedAt
@@ -351,6 +380,42 @@ export function formatSaltSummary(salts = []) {
     .join(' + ');
 }
 
+const CATEGORY_UNIT_LABELS = {
+  Tablet: 'TAB',
+  Capsule: 'CAP',
+  Syrup: 'ML',
+  Suspension: 'ML',
+  Drops: 'ML',
+  Injection: 'INJ',
+  Ointment: 'TUBE',
+  Cream: 'TUBE',
+  Gel: 'TUBE',
+  Powder: 'GM',
+  Sachet: 'SACHET',
+  Spray: 'SPRAY',
+  Inhaler: 'INHALER',
+  Patch: 'PATCH',
+  Lozenge: 'LOZ',
+  'Test Kit': 'KIT',
+  Diaper: 'PCS',
+  'Sanitary Pads': 'PCS',
+  Sanitizer: 'ML',
+  Granules: 'GM',
+  'Baby Food': 'PACK',
+  Lotion: 'ML',
+  Cosmetics: 'PCS',
+  'Mouth Wash': 'ML',
+  Soap: 'PCS',
+  Oil: 'ML',
+  Wipes: 'PCS',
+  'Hair Product': 'PCS',
+  Rotocap: 'CAP'
+};
+
+function defaultUnitLabel(category) {
+  return CATEGORY_UNIT_LABELS[cleanDisplay(category)] || 'UNIT';
+}
+
 export function attachSalts(rows = []) {
   const saltsByProduct = getSaltsForProductIds(rows.map((row) => row.productId));
 
@@ -359,6 +424,8 @@ export function attachSalts(rows = []) {
     return {
       ...row,
       inventoryItemId: row.id,
+      unitsPerPack: Math.max(1, Number(row.unitsPerPack) || 1),
+      unitLabel: cleanDisplay(row.unitLabel) || defaultUnitLabel(row.category),
       salts,
       saltSummary: formatSaltSummary(salts)
     };
@@ -595,6 +662,16 @@ export function updateInventoryItem(id, data = {}) {
     }
   }
 
+  let nextUnitsPerPack = null;
+  if (data.unitsPerPack !== undefined) {
+    const parsed = Number(data.unitsPerPack);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      throw validationError('Units per pack must be at least 1');
+    }
+    nextUnitsPerPack = parsed;
+  }
+  const nextUnitLabel = data.unitLabel === undefined ? null : cleanDisplay(data.unitLabel);
+
   statements.updateInventoryMetadata.run({
     id: itemId,
     batchNumber: nextBatchNumber,
@@ -605,10 +682,21 @@ export function updateInventoryItem(id, data = {}) {
     sellingPrice: toNumberOrNull(data.sellingPrice),
     discount: toNumberOrNull(data.discount),
     gstPercentage: toNumberOrNull(data.gstPercentage),
+    unitsPerPack: nextUnitsPerPack,
+    unitLabel: nextUnitLabel,
     supplier: data.supplier !== undefined ? cleanDisplay(data.supplier) : item.supplier,
     billNumber: data.billNumber === undefined ? null : cleanDisplay(data.billNumber),
     receivedAt: null
   });
+
+  if (nextUnitsPerPack !== null && nextUnitsPerPack > 1) {
+    statements.propagatePackMetadata.run({
+      productId,
+      id: itemId,
+      unitsPerPack: nextUnitsPerPack,
+      unitLabel: nextUnitLabel
+    });
+  }
 
   if (data.category !== undefined) {
     db.prepare(`

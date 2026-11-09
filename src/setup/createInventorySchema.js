@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   sellingPrice REAL NOT NULL DEFAULT 0,
   discount REAL NOT NULL DEFAULT 0,
   gstPercentage REAL NOT NULL DEFAULT 0,
+  unitsPerPack REAL NOT NULL DEFAULT 1,
+  unitLabel TEXT,
   supplier TEXT,
   supplierId INTEGER,
   billNumber TEXT,
@@ -141,6 +143,9 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   expiryDateSnapshot TEXT,
   saltSummarySnapshot TEXT,
   quantity REAL NOT NULL CHECK (quantity > 0),
+  saleQuantity REAL,
+  saleUnit TEXT,
+  unitsPerPack REAL NOT NULL DEFAULT 1,
   unitPrice REAL NOT NULL,
   mrpSnapshot REAL,
   discountPercent REAL NOT NULL DEFAULT 0,
@@ -184,6 +189,13 @@ CREATE INDEX IF NOT EXISTS idx_stock_movements_reference ON stock_movements(refe
 `);
 
 // Existing databases were created before the free-quantity field was added.
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((entry) => entry.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 const purchaseItemColumns = db.prepare('PRAGMA table_info(purchase_items)').all();
 if (!purchaseItemColumns.some((column) => column.name === 'free')) {
   db.exec('ALTER TABLE purchase_items ADD COLUMN free REAL NOT NULL DEFAULT 0');
@@ -210,6 +222,28 @@ if (addedBillNumberColumn) {
     WHERE billNumber IS NULL OR billNumber = '';
   `);
 }
+
+// Pack size and selling unit allow loose-unit sales from a full pack/strip.
+ensureColumn('inventory_items', 'unitsPerPack', 'REAL NOT NULL DEFAULT 1');
+ensureColumn('inventory_items', 'unitLabel', 'TEXT');
+ensureColumn('invoice_items', 'saleQuantity', 'REAL');
+ensureColumn('invoice_items', 'saleUnit', 'TEXT');
+ensureColumn('invoice_items', 'unitsPerPack', 'REAL NOT NULL DEFAULT 1');
+
+// Existing invoice lines were recorded as whole packs.
+db.exec(`
+  UPDATE invoice_items
+  SET saleQuantity = quantity
+  WHERE saleQuantity IS NULL OR saleQuantity <= 0;
+
+  UPDATE invoice_items
+  SET saleUnit = 'PACK'
+  WHERE saleUnit IS NULL OR saleUnit = '';
+
+  UPDATE invoice_items
+  SET unitsPerPack = 1
+  WHERE unitsPerPack IS NULL OR unitsPerPack < 1;
+`);
 
 // Archived batches (isActive = 0) must not count towards live stock.
 db.exec('DROP VIEW IF EXISTS product_stock');

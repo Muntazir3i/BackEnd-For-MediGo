@@ -15,9 +15,10 @@ import {
   toNumber
 } from '../services/inventoryService.js';
 
+const round4 = (value) => Math.round((Number(value) + Number.EPSILON) * 10000) / 10000;
+
 const statements = {
-  invoiceById: db.prepare('SELECT * FROM invoices WHERE id = ?'),
-  invoiceByNumber: db.prepare('SELECT * FROM invoices WHERE invoiceNumber = ?'),
+  invoiceById: db.prepare('SELECT * FROM invoices WHERE id = ?'),  invoiceByNumber: db.prepare('SELECT * FROM invoices WHERE invoiceNumber = ?'),
   invoiceByIdempotency: db.prepare('SELECT * FROM invoices WHERE idempotencyKey = ?'),
   itemsByInvoice: db.prepare(`
     SELECT * FROM invoice_items WHERE invoiceId = ? ORDER BY id ASC
@@ -36,14 +37,14 @@ const statements = {
   insertInvoiceItem: db.prepare(`
     INSERT INTO invoice_items (
       invoiceId, productId, inventoryItemId, nameSnapshot, batchNumberSnapshot,
-      expiryDateSnapshot, saltSummarySnapshot, quantity, unitPrice, mrpSnapshot,
-      discountPercent, discountAmount, gstPercent, gstAmount, lineSubtotal,
-      lineTotal, createdAt
+      expiryDateSnapshot, saltSummarySnapshot, quantity, saleQuantity, saleUnit,
+      unitsPerPack, unitPrice, mrpSnapshot, discountPercent, discountAmount,
+      gstPercent, gstAmount, lineSubtotal, lineTotal, createdAt
     ) VALUES (
       @invoiceId, @productId, @inventoryItemId, @nameSnapshot, @batchNumberSnapshot,
-      @expiryDateSnapshot, @saltSummarySnapshot, @quantity, @unitPrice, @mrpSnapshot,
-      @discountPercent, @discountAmount, @gstPercent, @gstAmount, @lineSubtotal,
-      @lineTotal, @createdAt
+      @expiryDateSnapshot, @saltSummarySnapshot, @quantity, @saleQuantity, @saleUnit,
+      @unitsPerPack, @unitPrice, @mrpSnapshot, @discountPercent, @discountAmount,
+      @gstPercent, @gstAmount, @lineSubtotal, @lineTotal, @createdAt
     )
   `),
   voidInvoice: db.prepare(`
@@ -83,6 +84,13 @@ function serializePrescription(value) {
 }
 
 function mapInvoiceItem(item) {
+  const saleQuantity = Number(item.saleQuantity ?? item.quantity) || 0;
+  const saleUnit = item.saleUnit || 'PACK';
+  const unitsPerPack = Number(item.unitsPerPack) || 1;
+  const saleUnitPrice = saleQuantity > 0
+    ? round2((Number(item.lineSubtotal) || 0) / saleQuantity)
+    : Number(item.unitPrice) || 0;
+
   return {
     id: item.inventoryItemId ?? item.id,
     invoiceItemId: item.id,
@@ -90,11 +98,17 @@ function mapInvoiceItem(item) {
     productId: item.productId,
     inventoryItemId: item.inventoryItemId,
     name: item.nameSnapshot,
-    qty: item.quantity,
-    quantity: item.quantity,
+    qty: saleQuantity,
+    quantity: saleQuantity,
+    stockQuantity: item.quantity,
+    saleQuantity,
+    saleUnit,
+    unitsPerPack,
     mrp: item.mrpSnapshot ?? 0,
-    price: item.unitPrice,
-    unitPrice: item.unitPrice,
+    price: saleUnitPrice,
+    unitPrice: saleUnitPrice,
+    packUnitPrice: item.unitPrice,
+    saleUnitPrice,
     discount: item.discountPercent,
     discountAmount: item.discountAmount,
     gstPercentage: item.gstPercent,
@@ -157,7 +171,9 @@ function normalizeInvoiceItems(payload) {
 
   return rawItems.map((item) => {
     const inventoryItemId = Number(item.inventoryItemId ?? item.id);
-    const quantity = toNumber(item.qty ?? item.quantity);
+    const saleQuantity = toNumber(item.qty ?? item.saleQuantity ?? item.quantity);
+    const saleUnit = cleanDisplay(item.saleUnit);
+    const unitsPerPack = toNumber(item.unitsPerPack);
     const unitPrice = toNumber(item.price ?? item.unitPrice ?? item.mrp);
     const discountPercent = toNumber(item.discount ?? item.discountPercent);
     const gstPercent = toNumber(item.gstPercent ?? item.gstPercentage);
@@ -165,8 +181,11 @@ function normalizeInvoiceItems(payload) {
     if (!Number.isSafeInteger(inventoryItemId) || inventoryItemId <= 0) {
       throw validationError('Every invoice line must reference an inventory item');
     }
-    if (quantity <= 0) {
+    if (saleQuantity <= 0) {
       throw validationError('Every invoice line must have a quantity greater than 0');
+    }
+    if (unitsPerPack < 0) {
+      throw validationError('Units per pack cannot be negative');
     }
     if (unitPrice < 0) {
       throw validationError('Invoice price cannot be negative');
@@ -175,19 +194,14 @@ function normalizeInvoiceItems(payload) {
       throw validationError('Discount must be between 0 and 100');
     }
 
-    const lineSubtotal = round2(unitPrice * quantity);
-    const discountAmount = round2(lineSubtotal * (discountPercent / 100));
-    const lineTotal = round2(lineSubtotal - discountAmount);
-
     return {
       inventoryItemId,
-      quantity,
+      saleQuantity,
+      saleUnit,
+      unitsPerPack,
       unitPrice,
       discountPercent,
-      gstPercent,
-      lineSubtotal,
-      discountAmount,
-      lineTotal
+      gstPercent
     };
   });
 }
@@ -233,14 +247,45 @@ export function createSaleInvoice(payload = {}) {
         throw conflictError(`${inventory.name} is no longer available for sale`);
       }
 
-      if (inventory.stock < line.quantity) {
+      const unitsPerPack = Math.max(
+        1,
+        Number(line.unitsPerPack) || Number(inventory.unitsPerPack) || 1
+      );
+      const saleUnit = (line.saleUnit || inventory.unitLabel || 'PACK').toUpperCase();
+      const isPackSale = /^(PACK|PACKS|STRIP|STRIPS|BOX|BOXES|BOTTLE|BOTTLES|PIECE|PIECES|UNIT|UNITS)$/.test(
+        saleUnit
+      );
+      const packQuantity = round4(
+        isPackSale ? line.saleQuantity : line.saleQuantity / unitsPerPack
+      );
+
+      if (packQuantity <= 0) {
+        throw validationError(`${inventory.name} quantity must be greater than 0`);
+      }
+
+      if (inventory.stock < packQuantity) {
         throw conflictError(
-          `${inventory.name} only has ${inventory.stock} unit(s) available. Refresh the bill and try again.`,
+          `${inventory.name} only has ${inventory.stock} pack(s) available. Refresh the bill and try again.`,
           { inventoryItemId: inventory.inventoryItemId, available: inventory.stock }
         );
       }
 
-      return { line, inventory };
+      const lineSubtotal = round2(line.unitPrice * packQuantity);
+      const discountAmount = round2(lineSubtotal * (line.discountPercent / 100));
+      const lineTotal = round2(lineSubtotal - discountAmount);
+
+      return {
+        line: {
+          ...line,
+          quantity: packQuantity,
+          saleUnit,
+          unitsPerPack,
+          lineSubtotal,
+          discountAmount,
+          lineTotal
+        },
+        inventory
+      };
     });
 
     const subtotal = round2(prepared.reduce((sum, entry) => sum + entry.line.lineSubtotal, 0));
@@ -291,6 +336,9 @@ export function createSaleInvoice(payload = {}) {
         expiryDateSnapshot: inventory.expiryDate,
         saltSummarySnapshot: inventory.saltSummary || null,
         quantity: line.quantity,
+        saleQuantity: line.saleQuantity,
+        saleUnit: line.saleUnit,
+        unitsPerPack: line.unitsPerPack,
         unitPrice: line.unitPrice,
         mrpSnapshot: inventory.mrp,
         discountPercent: line.discountPercent,
