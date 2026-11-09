@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS inventory_items (
   gstPercentage REAL NOT NULL DEFAULT 0,
   supplier TEXT,
   supplierId INTEGER,
+  billNumber TEXT,
   receivedAt TEXT,
   isActive INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL DEFAULT (datetime('now')),
@@ -186,6 +187,28 @@ CREATE INDEX IF NOT EXISTS idx_stock_movements_reference ON stock_movements(refe
 const purchaseItemColumns = db.prepare('PRAGMA table_info(purchase_items)').all();
 if (!purchaseItemColumns.some((column) => column.name === 'free')) {
   db.exec('ALTER TABLE purchase_items ADD COLUMN free REAL NOT NULL DEFAULT 0');
+}
+
+// Inventory batches now keep the supplier bill number they came from.
+const inventoryColumns = db.prepare('PRAGMA table_info(inventory_items)').all();
+const addedBillNumberColumn = !inventoryColumns.some((column) => column.name === 'billNumber');
+if (addedBillNumberColumn) {
+  db.exec('ALTER TABLE inventory_items ADD COLUMN billNumber TEXT');
+
+  // Backfill existing batches from their latest non-void purchase bill.
+  db.exec(`
+    UPDATE inventory_items
+    SET billNumber = (
+      SELECT pb.invoice
+      FROM purchase_items pi
+      JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+      WHERE pi.inventoryItemId = inventory_items.id
+        AND COALESCE(pb.status, 'posted') <> 'void'
+      ORDER BY pb.date DESC, pb.id DESC
+      LIMIT 1
+    )
+    WHERE billNumber IS NULL OR billNumber = '';
+  `);
 }
 
 // Archived batches (isActive = 0) must not count towards live stock.

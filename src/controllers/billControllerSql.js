@@ -287,6 +287,7 @@ export function addBill(billData = {}) {
       const item = resolveInventoryItem(product.id, {
         ...line,
         supplier: line.supplier || cleanDisplay(billData.supplierName),
+        billNumber: invoice,
         receivedAt: date
       });
 
@@ -378,6 +379,7 @@ export function updateBill(billId, billData = {}) {
       const target = resolveInventoryItem(product.id, {
         ...line,
         supplier: previous.supplierSnapshot || cleanDisplay(billData.supplierName),
+        billNumber: invoice,
         receivedAt: date
       });
 

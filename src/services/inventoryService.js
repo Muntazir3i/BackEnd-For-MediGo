@@ -32,6 +32,7 @@ export const INVENTORY_SELECT = `
     i.discount,
     i.gstPercentage,
     i.supplier,
+    i.billNumber,
     i.receivedAt,
     i.isActive,
     p.isActive AS productIsActive,
@@ -79,11 +80,11 @@ const statements = {
     INSERT INTO inventory_items (
       productId, batchNumber, batchKey, expiryDate, quantity, purchasePrice,
       mrp, sellingPrice, discount, gstPercentage, supplier, supplierId,
-      receivedAt, isActive
+      billNumber, receivedAt, isActive
     ) VALUES (
       @productId, @batchNumber, @batchKey, @expiryDate, @quantity, @purchasePrice,
       @mrp, @sellingPrice, @discount, @gstPercentage, @supplier, @supplierId,
-      @receivedAt, 1
+      @billNumber, @receivedAt, 1
     )
   `),
   updateInventoryMetadata: db.prepare(`
@@ -97,6 +98,7 @@ const statements = {
         discount = COALESCE(@discount, discount),
         gstPercentage = COALESCE(@gstPercentage, gstPercentage),
         supplier = CASE WHEN @supplier IS NULL THEN supplier ELSE @supplier END,
+        billNumber = CASE WHEN @billNumber IS NULL THEN billNumber ELSE @billNumber END,
         receivedAt = COALESCE(@receivedAt, receivedAt),
         isActive = 1,
         updatedAt = datetime('now')
@@ -202,6 +204,7 @@ export function resolveInventoryItem(productId, data = {}) {
   const discount = toNumberOrNull(data.discount);
   const gstPercentage = toNumberOrNull(data.gstPercentage);
   const supplier = data.supplier === undefined ? null : cleanDisplay(data.supplier);
+  const billNumber = data.billNumber === undefined ? null : cleanDisplay(data.billNumber);
   const receivedAt = data.receivedAt === undefined ? null : cleanDisplay(data.receivedAt);
 
   let item = statements.inventoryByProductBatch.get(productId, batchKey);
@@ -220,6 +223,7 @@ export function resolveInventoryItem(productId, data = {}) {
       gstPercentage: gstPercentage ?? 0,
       supplier,
       supplierId: toNumberOrNull(data.supplierId),
+      billNumber,
       receivedAt
     });
     item = statements.inventoryById.get(result.lastInsertRowid);
@@ -235,6 +239,7 @@ export function resolveInventoryItem(productId, data = {}) {
       discount,
       gstPercentage,
       supplier,
+      billNumber,
       receivedAt
     });
     item = statements.inventoryById.get(item.id);
@@ -601,6 +606,7 @@ export function updateInventoryItem(id, data = {}) {
     discount: toNumberOrNull(data.discount),
     gstPercentage: toNumberOrNull(data.gstPercentage),
     supplier: data.supplier !== undefined ? cleanDisplay(data.supplier) : item.supplier,
+    billNumber: data.billNumber === undefined ? null : cleanDisplay(data.billNumber),
     receivedAt: null
   });
 
