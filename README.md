@@ -239,6 +239,7 @@ Compatibility invoice routes are also available under `/api/invoice`.
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/insights` | Purchase trends, payables, products and business metrics |
+| `GET` | `/api/insights/medicines` | Medicine order count, quantity and purchase value lookup |
 
 ## Supplier bill image extraction
 

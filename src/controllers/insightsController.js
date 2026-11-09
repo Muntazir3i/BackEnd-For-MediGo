@@ -174,6 +174,34 @@ const statements = {
     ORDER BY amount DESC
     LIMIT 8
   `),
+  medicinePurchaseStats: db.prepare(`
+    SELECT
+      pi.productId,
+      MAX(COALESCE(p.name, pi.nameSnapshot)) AS name,
+      COUNT(DISTINCT pi.purchaseBillId) AS orderCount,
+      COUNT(*) AS lineCount,
+      COALESCE(SUM(pi.quantity), 0) AS totalQuantity,
+      COALESCE(SUM(pi.free), 0) AS freeQuantity,
+      COALESCE(SUM(pi.quantity * pi.unitPrice), 0) AS grossAmount,
+      COALESCE(SUM(
+        (pi.quantity * pi.unitPrice)
+        * (1 - (pi.discount / 100.0))
+        * (1 + (pi.gstPercentage / 100.0))
+      ), 0) AS totalAmount,
+      CASE
+        WHEN SUM(pi.quantity) > 0 THEN SUM(pi.quantity * pi.unitPrice) / SUM(pi.quantity)
+        ELSE 0
+      END AS averageRate,
+      MAX(pb.date) AS lastOrderedDate
+    FROM purchase_items pi
+    JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+    LEFT JOIN products p ON p.id = pi.productId
+    WHERE pb.status <> 'void'
+      AND (@search IS NULL OR pi.nameSnapshot LIKE @search OR p.name LIKE @search)
+    GROUP BY COALESCE(pi.productId, UPPER(TRIM(pi.nameSnapshot)))
+    ORDER BY orderCount DESC, totalAmount DESC
+    LIMIT @limit
+  `),
   lastYearSummary: db.prepare(`
     SELECT
       COUNT(DISTINCT pi.purchaseBillId) AS billCount,
@@ -578,6 +606,34 @@ function getInsights(req, res) {
       recentQuantity: round2(row.recentQuantity),
       averageMonthly: round2(row.averageMonthly)
     }))
+  });
+}
+
+export function getMedicinePurchaseStats(req, res) {
+  const searchText = String(req.query.search ?? '').trim();
+  const search = searchText ? `%${searchText}%` : null;
+  const requestedLimit = Number(req.query.limit);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 50)
+    : 20;
+
+  const medicines = statements.medicinePurchaseStats.all({ search, limit }).map((row) => ({
+    productId: row.productId ?? null,
+    name: row.name || 'Unnamed medicine',
+    orderCount: Number(row.orderCount) || 0,
+    lineCount: Number(row.lineCount) || 0,
+    totalQuantity: round2(row.totalQuantity),
+    freeQuantity: round2(row.freeQuantity),
+    grossAmount: round2(row.grossAmount),
+    totalAmount: round2(row.totalAmount),
+    averageRate: round2(row.averageRate),
+    lastOrderedDate: row.lastOrderedDate || ''
+  }));
+
+  res.json({
+    search: searchText,
+    count: medicines.length,
+    medicines
   });
 }
 
