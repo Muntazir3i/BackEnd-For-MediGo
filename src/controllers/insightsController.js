@@ -202,6 +202,52 @@ const statements = {
     ORDER BY orderCount DESC, totalAmount DESC
     LIMIT @limit
   `),
+  priceHistoryMatches: db.prepare(`
+    SELECT
+      pi.productId,
+      MAX(COALESCE(p.name, pi.nameSnapshot)) AS name,
+      COUNT(*) AS lineCount,
+      MAX(pb.date) AS lastPurchased
+    FROM purchase_items pi
+    JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+    LEFT JOIN products p ON p.id = pi.productId
+    WHERE pb.status <> 'void'
+      AND (pi.nameSnapshot LIKE @search OR p.name LIKE @search)
+    GROUP BY COALESCE(pi.productId, UPPER(TRIM(pi.nameSnapshot)))
+    ORDER BY lineCount DESC, lastPurchased DESC
+    LIMIT 12
+  `),
+  priceHistoryPoints: db.prepare(`
+    SELECT
+      pb.date AS date,
+      MAX(pb.invoice) AS invoice,
+      MAX(pb.supplierName) AS supplierName,
+      MAX(pi.nameSnapshot) AS name,
+      COALESCE(
+        SUM(pi.quantity * pi.unitPrice) / NULLIF(SUM(pi.quantity), 0),
+        MAX(pi.unitPrice)
+      ) AS unitPrice,
+      COALESCE(
+        SUM(pi.quantity * pi.gstPercentage) / NULLIF(SUM(pi.quantity), 0),
+        MAX(pi.gstPercentage)
+      ) AS gstPercentage,
+      COALESCE(
+        SUM(pi.quantity * pi.mrp) / NULLIF(SUM(pi.quantity), 0),
+        MAX(pi.mrp)
+      ) AS mrp,
+      COALESCE(SUM(pi.quantity), 0) AS quantity,
+      COUNT(*) AS lines
+    FROM purchase_items pi
+    JOIN purchase_bills pb ON pb.id = pi.purchaseBillId
+    WHERE pb.status <> 'void'
+      AND (
+        (@productId IS NOT NULL AND pi.productId = @productId)
+        OR (@productId IS NULL AND pi.nameSnapshot = @name COLLATE NOCASE)
+      )
+    GROUP BY pb.date
+    ORDER BY pb.date ASC
+    LIMIT 200
+  `),
   lastYearSummary: db.prepare(`
     SELECT
       COUNT(DISTINCT pi.purchaseBillId) AS billCount,
@@ -634,6 +680,98 @@ export function getMedicinePurchaseStats(req, res) {
     search: searchText,
     count: medicines.length,
     medicines
+  });
+}
+
+export function getMedicinePriceHistory(req, res) {
+  const searchText = String(req.query.search ?? '').trim();
+  const requestedProductId = Number(req.query.productId);
+  const productId = Number.isSafeInteger(requestedProductId) && requestedProductId > 0
+    ? requestedProductId
+    : null;
+  const name = String(req.query.name ?? '').trim();
+
+  // No medicine selected yet: return matching medicines so the UI can show a
+  // short picker instead of guessing which similarly named product was meant.
+  if (!productId && !name) {
+    const search = searchText ? `%${searchText}%` : null;
+
+    const matches = search
+      ? statements.priceHistoryMatches.all({ search }).map((row) => ({
+          productId: row.productId ?? null,
+          name: row.name || 'Unnamed medicine',
+          lineCount: Number(row.lineCount) || 0,
+          lastPurchased: row.lastPurchased || ''
+        }))
+      : [];
+
+    res.json({ search: searchText, matches });
+    return;
+  }
+
+  const rows = statements.priceHistoryPoints.all({
+    productId,
+    name: name || null
+  });
+
+  const points = rows.map((row) => {
+    const unitPrice = round2(row.unitPrice);
+    const gstPercentage = round2(row.gstPercentage);
+
+    return {
+      date: row.date || '',
+      invoice: row.invoice || '',
+      supplierName: row.supplierName || '',
+      quantity: round2(row.quantity),
+      unitPrice,
+      gstPercentage,
+      // Purchase rates are recorded before GST, so add the GST that applied on
+      // that bill to make the chart comparable with the printed MRP.
+      unitPriceWithGst: round2(unitPrice * (1 + gstPercentage / 100)),
+      mrp: round2(row.mrp),
+      lines: Number(row.lines) || 1
+    };
+  });
+
+  const latest = points[points.length - 1] || null;
+  const previous = points.length > 1 ? points[points.length - 2] : null;
+  const unitPriceValues = points
+    .map((point) => point.unitPriceWithGst)
+    .filter((value) => Number.isFinite(value));
+  const mrpValues = points
+    .map((point) => point.mrp)
+    .filter((value) => Number.isFinite(value));
+
+  const summary = {
+    pointCount: points.length,
+    firstDate: points[0]?.date || '',
+    lastDate: latest?.date || '',
+    latestUnitPrice: latest?.unitPrice ?? 0,
+    latestGstPercentage: latest?.gstPercentage ?? 0,
+    latestUnitPriceWithGst: latest?.unitPriceWithGst ?? 0,
+    latestMrp: latest?.mrp ?? 0,
+    previousUnitPriceWithGst: previous?.unitPriceWithGst ?? null,
+    unitPriceChangePercent:
+      previous && previous.unitPriceWithGst > 0
+        ? round2(
+            ((latest.unitPriceWithGst - previous.unitPriceWithGst) /
+              previous.unitPriceWithGst) *
+              100
+          )
+        : null,
+    minUnitPriceWithGst: unitPriceValues.length ? round2(Math.min(...unitPriceValues)) : 0,
+    maxUnitPriceWithGst: unitPriceValues.length ? round2(Math.max(...unitPriceValues)) : 0,
+    minMrp: mrpValues.length ? round2(Math.min(...mrpValues)) : 0,
+    maxMrp: mrpValues.length ? round2(Math.max(...mrpValues)) : 0
+  };
+
+  res.json({
+    medicine: {
+      productId,
+      name: name || rows[0]?.name || 'Medicine'
+    },
+    points,
+    summary
   });
 }
 
