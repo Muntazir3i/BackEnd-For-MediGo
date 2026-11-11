@@ -1,3 +1,7 @@
+// Environment and pending restores must be evaluated before any DB import.
+import 'dotenv/config'
+import './setup/applyPendingRestore.js'
+
 // Schema setup must be evaluated before controllers prepare their statements.
 import './setup/createInventorySchema.js'
 import './setup/createSupplierTable.js'
@@ -20,9 +24,11 @@ import expiryRoutes from './routes/expiryRouter.js'
 import creditNoteRoutes from './routes/creditNoteRouter.js'
 import insightsRoutes from './routes/insightsRouter.js'
 import settingsRoutes from './routes/settingsRouter.js'
+import registerRoutes from './routes/registerRouter.js'
+import backupRoutes from './routes/backupRouter.js'
+import { startBackupScheduler } from './services/backupService.js'
 import cors from 'cors'
 import billScanRouter from './routes/billScan.js'
-import 'dotenv/config'
 
 const app = express();
 const PORT = 8008;
@@ -47,7 +53,10 @@ app.use("/api/expiry", expiryRoutes);
 app.use("/api/credit-notes", creditNoteRoutes);
 app.use("/api/insights", insightsRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/registers", registerRoutes);
+app.use("/api/backups", backupRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    startBackupScheduler();
 });

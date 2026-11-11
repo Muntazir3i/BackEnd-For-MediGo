@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS products (
   defaultSellingPrice REAL NOT NULL DEFAULT 0,
   discount REAL NOT NULL DEFAULT 0,
   gstPercentage REAL NOT NULL DEFAULT 0,
+  drugSchedule TEXT,
   isActive INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL DEFAULT (datetime('now')),
   updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
@@ -128,6 +129,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   stockDeducted INTEGER NOT NULL DEFAULT 1,
   legacyRecord INTEGER NOT NULL DEFAULT 0,
   prescriptionJson TEXT,
+  prescriberName TEXT,
+  prescriptionReference TEXT,
+  prescriptionVerified INTEGER NOT NULL DEFAULT 0,
   idempotencyKey TEXT UNIQUE,
   createdAt TEXT NOT NULL,
   voidedAt TEXT
@@ -142,6 +146,7 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   batchNumberSnapshot TEXT,
   expiryDateSnapshot TEXT,
   saltSummarySnapshot TEXT,
+  drugScheduleSnapshot TEXT,
   quantity REAL NOT NULL CHECK (quantity > 0),
   saleQuantity REAL,
   saleUnit TEXT,
@@ -229,6 +234,13 @@ ensureColumn('inventory_items', 'unitLabel', 'TEXT');
 ensureColumn('invoice_items', 'saleQuantity', 'REAL');
 ensureColumn('invoice_items', 'saleUnit', 'TEXT');
 ensureColumn('invoice_items', 'unitsPerPack', 'REAL NOT NULL DEFAULT 1');
+
+// Prescription and statutory schedule tracking for Schedule H / H1 / X drugs.
+ensureColumn('products', 'drugSchedule', 'TEXT');
+ensureColumn('invoice_items', 'drugScheduleSnapshot', 'TEXT');
+ensureColumn('invoices', 'prescriberName', 'TEXT');
+ensureColumn('invoices', 'prescriptionReference', 'TEXT');
+ensureColumn('invoices', 'prescriptionVerified', 'INTEGER NOT NULL DEFAULT 0');
 
 // Existing invoice lines were recorded as whole packs.
 db.exec(`

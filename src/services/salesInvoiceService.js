@@ -21,9 +21,10 @@ const statements = {
   invoiceById: db.prepare('SELECT * FROM invoices WHERE id = ?'),  invoiceByNumber: db.prepare('SELECT * FROM invoices WHERE invoiceNumber = ?'),
   invoiceByIdempotency: db.prepare('SELECT * FROM invoices WHERE idempotencyKey = ?'),
   itemsByInvoice: db.prepare(`
-    SELECT ii.*, inv.quantity AS liveStock
+    SELECT ii.*, inv.quantity AS liveStock, p.drugSchedule AS liveDrugSchedule
     FROM invoice_items ii
     LEFT JOIN inventory_items inv ON inv.id = ii.inventoryItemId
+    LEFT JOIN products p ON p.id = ii.productId
     WHERE ii.invoiceId = ?
     ORDER BY ii.id ASC
   `),
@@ -37,7 +38,10 @@ const statements = {
         totalGst = @totalGst,
         total = @total,
         status = @status,
-        prescriptionJson = @prescriptionJson
+        prescriptionJson = @prescriptionJson,
+        prescriberName = @prescriberName,
+        prescriptionReference = @prescriptionReference,
+        prescriptionVerified = @prescriptionVerified
     WHERE id = @id
   `),
   deleteInvoiceItems: db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?'),
@@ -45,24 +49,26 @@ const statements = {
     INSERT INTO invoices (
       invoiceNumber, customerName, customerPhone, customerAddress, subtotal,
       totalDiscount, totalGst, total, status, stockDeducted, legacyRecord,
-      prescriptionJson, idempotencyKey, createdAt
+      prescriptionJson, prescriberName, prescriptionReference, prescriptionVerified,
+      idempotencyKey, createdAt
     ) VALUES (
       @invoiceNumber, @customerName, @customerPhone, @customerAddress, @subtotal,
       @totalDiscount, @totalGst, @total, @status, 1, 0,
-      @prescriptionJson, @idempotencyKey, @createdAt
+      @prescriptionJson, @prescriberName, @prescriptionReference, @prescriptionVerified,
+      @idempotencyKey, @createdAt
     )
   `),
   insertInvoiceItem: db.prepare(`
     INSERT INTO invoice_items (
       invoiceId, productId, inventoryItemId, nameSnapshot, batchNumberSnapshot,
-      expiryDateSnapshot, saltSummarySnapshot, quantity, saleQuantity, saleUnit,
-      unitsPerPack, unitPrice, mrpSnapshot, discountPercent, discountAmount,
-      gstPercent, gstAmount, lineSubtotal, lineTotal, createdAt
+      expiryDateSnapshot, saltSummarySnapshot, drugScheduleSnapshot, quantity,
+      saleQuantity, saleUnit, unitsPerPack, unitPrice, mrpSnapshot, discountPercent,
+      discountAmount, gstPercent, gstAmount, lineSubtotal, lineTotal, createdAt
     ) VALUES (
       @invoiceId, @productId, @inventoryItemId, @nameSnapshot, @batchNumberSnapshot,
-      @expiryDateSnapshot, @saltSummarySnapshot, @quantity, @saleQuantity, @saleUnit,
-      @unitsPerPack, @unitPrice, @mrpSnapshot, @discountPercent, @discountAmount,
-      @gstPercent, @gstAmount, @lineSubtotal, @lineTotal, @createdAt
+      @expiryDateSnapshot, @saltSummarySnapshot, @drugScheduleSnapshot, @quantity,
+      @saleQuantity, @saleUnit, @unitsPerPack, @unitPrice, @mrpSnapshot, @discountPercent,
+      @discountAmount, @gstPercent, @gstAmount, @lineSubtotal, @lineTotal, @createdAt
     )
   `),
   voidInvoice: db.prepare(`
@@ -122,6 +128,7 @@ function mapInvoiceItem(item) {
     liveStock: item.liveStock === undefined || item.liveStock === null
       ? null
       : Number(item.liveStock),
+    liveDrugSchedule: item.liveDrugSchedule || null,
     saleQuantity,
     saleUnit,
     unitsPerPack,
@@ -138,6 +145,7 @@ function mapInvoiceItem(item) {
     lineTotal: item.lineTotal,
     batchNumber: item.batchNumberSnapshot,
     expiryDate: item.expiryDateSnapshot,
+    drugSchedule: item.drugScheduleSnapshot || null,
     saltSummary: item.saltSummarySnapshot,
     createdAt: item.createdAt
   };
@@ -168,6 +176,9 @@ function mapInvoice(header, itemRows) {
     createdAt: header.createdAt,
     voidedAt: header.voidedAt,
     prescription: parsePrescription(header.prescriptionJson),
+    prescriberName: header.prescriberName || '',
+    prescriptionReference: header.prescriptionReference || '',
+    prescriptionVerified: Number(header.prescriptionVerified) === 1,
     items,
     medicines: items
   };
@@ -296,6 +307,55 @@ function prepareInvoiceLines(lines, { allowedInactiveIds = new Set() } = {}) {
   return { prepared, subtotal, totalDiscount, totalGst, total };
 }
 
+const SCHEDULE_LABELS = {
+  H: 'Schedule H',
+  H1: 'Schedule H1',
+  X: 'Schedule X'
+};
+
+function normalizeDrugSchedule(value) {
+  const text = cleanDisplay(value).toUpperCase();
+  return ['H', 'H1', 'X'].includes(text) ? text : null;
+}
+
+function validatePrescriptionCompliance({
+  prepared,
+  prescriberName,
+  prescriptionReference,
+  prescriptionVerified,
+  prescription
+}) {
+  const schedules = [
+    ...new Set(
+      prepared
+        .map(({ inventory }) => normalizeDrugSchedule(inventory.drugSchedule))
+        .filter(Boolean)
+    )
+  ];
+
+  if (schedules.length === 0) return;
+
+  const labels = schedules.map((schedule) => SCHEDULE_LABELS[schedule]).join(', ');
+
+  if (!prescriberName) {
+    throw validationError(`Prescriber name is required for ${labels} medicines`);
+  }
+
+  if (!prescriptionVerified) {
+    throw validationError('Confirm that the prescription was verified before billing scheduled medicines');
+  }
+
+  if (schedules.includes('X') && !prescriptionReference) {
+    throw validationError('Prescription reference is required for Schedule X medicines');
+  }
+
+  if (schedules.includes('H1') && !prescriptionReference && !prescription) {
+    throw validationError(
+      'Attach a prescription or enter a prescription reference for Schedule H1 medicines'
+    );
+  }
+}
+
 function insertInvoiceLines({
   invoiceId,
   invoiceNumber,
@@ -326,6 +386,7 @@ function insertInvoiceLines({
       batchNumberSnapshot: inventory.batchNumber,
       expiryDateSnapshot: inventory.expiryDate,
       saltSummarySnapshot: inventory.saltSummary || null,
+      drugScheduleSnapshot: normalizeDrugSchedule(inventory.drugSchedule),
       quantity: line.quantity,
       saleQuantity: line.saleQuantity,
       saleUnit: line.saleUnit,
@@ -357,6 +418,14 @@ export function createSaleInvoice(payload = {}) {
   const createdAt = normalizeDate(payload.date ?? payload.createdAt);
   const idempotencyKey = cleanDisplay(payload.idempotencyKey) || null;
   const prescriptionJson = serializePrescription(payload.prescription);
+  const prescriberName = cleanDisplay(payload.prescriberName);
+  const prescriptionReference = cleanDisplay(payload.prescriptionReference);
+  const prescriptionVerified =
+    payload.prescriptionVerified === true
+    || payload.prescriptionVerified === 1
+    || payload.prescriptionVerified === '1'
+      ? 1
+      : 0;
 
   const transaction = db.transaction(() => {
     if (idempotencyKey) {
@@ -376,6 +445,14 @@ export function createSaleInvoice(payload = {}) {
     const { prepared, subtotal, totalDiscount, totalGst, total } =
       prepareInvoiceLines(lines);
 
+    validatePrescriptionCompliance({
+      prepared,
+      prescriberName,
+      prescriptionReference,
+      prescriptionVerified,
+      prescription: payload.prescription
+    });
+
     const result = statements.insertInvoice.run({
       invoiceNumber,
       customerName,
@@ -387,6 +464,9 @@ export function createSaleInvoice(payload = {}) {
       total,
       status,
       prescriptionJson,
+      prescriberName: prescriberName || null,
+      prescriptionReference: prescriptionReference || null,
+      prescriptionVerified,
       idempotencyKey,
       createdAt
     });
@@ -480,9 +560,10 @@ export function listInvoices({
   if (headers.length === 0) return [];
 
   const itemStmt = db.prepare(`
-    SELECT ii.*, inv.quantity AS liveStock
+    SELECT ii.*, inv.quantity AS liveStock, p.drugSchedule AS liveDrugSchedule
     FROM invoice_items ii
     LEFT JOIN inventory_items inv ON inv.id = ii.inventoryItemId
+    LEFT JOIN products p ON p.id = ii.productId
     WHERE ii.invoiceId IN (SELECT value FROM json_each(?))
     ORDER BY ii.invoiceId, ii.id
   `);
@@ -497,9 +578,10 @@ export function listInvoices({
   if (items.length === 0) {
     const placeholders = headers.map(() => '?').join(', ');
     items = db.prepare(`
-      SELECT ii.*, inv.quantity AS liveStock
+      SELECT ii.*, inv.quantity AS liveStock, p.drugSchedule AS liveDrugSchedule
       FROM invoice_items ii
       LEFT JOIN inventory_items inv ON inv.id = ii.inventoryItemId
+      LEFT JOIN products p ON p.id = ii.productId
       WHERE ii.invoiceId IN (${placeholders})
       ORDER BY ii.invoiceId, ii.id
     `).all(...headers.map((header) => header.id));
@@ -596,6 +678,25 @@ export function updateSaleInvoice(id, payload = {}) {
       ? serializePrescription(payload.prescription)
       : invoice.prescriptionJson;
 
+    const prescriberName = payload.prescriberName === undefined
+      ? invoice.prescriberName || ''
+      : cleanDisplay(payload.prescriberName);
+    const prescriptionReference = payload.prescriptionReference === undefined
+      ? invoice.prescriptionReference || ''
+      : cleanDisplay(payload.prescriptionReference);
+    const prescriptionVerified = payload.prescriptionVerified === undefined
+      ? (Number(invoice.prescriptionVerified) === 1 ? 1 : 0)
+      : (
+        payload.prescriptionVerified === true
+        || payload.prescriptionVerified === 1
+        || payload.prescriptionVerified === '1'
+          ? 1
+          : 0
+      );
+    const prescriptionForValidation = Object.prototype.hasOwnProperty.call(payload, 'prescription')
+      ? payload.prescription
+      : parsePrescription(invoice.prescriptionJson);
+
     const lines = normalizeInvoiceItems(payload);
     const allowedInactiveIds = new Set(
       existingItems
@@ -605,6 +706,14 @@ export function updateSaleInvoice(id, payload = {}) {
 
     const { prepared, subtotal, totalDiscount, totalGst, total } =
       prepareInvoiceLines(lines, { allowedInactiveIds });
+
+    validatePrescriptionCompliance({
+      prepared,
+      prescriberName,
+      prescriptionReference,
+      prescriptionVerified,
+      prescription: prescriptionForValidation
+    });
 
     statements.updateInvoice.run({
       id: invoiceId,
@@ -616,7 +725,10 @@ export function updateSaleInvoice(id, payload = {}) {
       totalGst,
       total,
       status,
-      prescriptionJson
+      prescriptionJson,
+      prescriberName: prescriberName || null,
+      prescriptionReference: prescriptionReference || null,
+      prescriptionVerified
     });
 
     statements.deleteInvoiceItems.run(invoiceId);

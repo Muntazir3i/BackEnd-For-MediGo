@@ -23,6 +23,7 @@ export const INVENTORY_SELECT = `
     i.productId,
     p.name,
     COALESCE(p.category, '') AS category,
+    p.drugSchedule,
     i.batchNumber,
     i.expiryDate,
     i.quantity AS stock,
@@ -72,6 +73,11 @@ const statements = {
   renameProduct: db.prepare(`
     UPDATE products
     SET name = @name, normalizedName = @normalizedName, updatedAt = datetime('now')
+    WHERE id = @id
+  `),
+  updateProductSchedule: db.prepare(`
+    UPDATE products
+    SET drugSchedule = @drugSchedule, updatedAt = datetime('now')
     WHERE id = @id
   `),
   inventoryByProductBatch: db.prepare(`
@@ -704,6 +710,18 @@ export function updateInventoryItem(id, data = {}) {
       SET category = @category, updatedAt = datetime('now')
       WHERE id = @id
     `).run({ id: productId, category: cleanDisplay(data.category) });
+  }
+
+  if (data.drugSchedule !== undefined) {
+    const rawSchedule = cleanDisplay(data.drugSchedule).toUpperCase();
+    if (!['', 'H', 'H1', 'X'].includes(rawSchedule)) {
+      throw validationError('Drug schedule must be H, H1, X or empty');
+    }
+
+    statements.updateProductSchedule.run({
+      id: productId,
+      drugSchedule: rawSchedule || null
+    });
   }
 
   if (data.stock !== undefined && data.stock !== null && data.stock !== '') {
