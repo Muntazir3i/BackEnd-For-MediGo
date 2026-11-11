@@ -21,8 +21,26 @@ const statements = {
   invoiceById: db.prepare('SELECT * FROM invoices WHERE id = ?'),  invoiceByNumber: db.prepare('SELECT * FROM invoices WHERE invoiceNumber = ?'),
   invoiceByIdempotency: db.prepare('SELECT * FROM invoices WHERE idempotencyKey = ?'),
   itemsByInvoice: db.prepare(`
-    SELECT * FROM invoice_items WHERE invoiceId = ? ORDER BY id ASC
+    SELECT ii.*, inv.quantity AS liveStock
+    FROM invoice_items ii
+    LEFT JOIN inventory_items inv ON inv.id = ii.inventoryItemId
+    WHERE ii.invoiceId = ?
+    ORDER BY ii.id ASC
   `),
+  updateInvoice: db.prepare(`
+    UPDATE invoices
+    SET customerName = @customerName,
+        customerPhone = @customerPhone,
+        customerAddress = @customerAddress,
+        subtotal = @subtotal,
+        totalDiscount = @totalDiscount,
+        totalGst = @totalGst,
+        total = @total,
+        status = @status,
+        prescriptionJson = @prescriptionJson
+    WHERE id = @id
+  `),
+  deleteInvoiceItems: db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?'),
   insertInvoice: db.prepare(`
     INSERT INTO invoices (
       invoiceNumber, customerName, customerPhone, customerAddress, subtotal,
@@ -101,6 +119,9 @@ function mapInvoiceItem(item) {
     qty: saleQuantity,
     quantity: saleQuantity,
     stockQuantity: item.quantity,
+    liveStock: item.liveStock === undefined || item.liveStock === null
+      ? null
+      : Number(item.liveStock),
     saleQuantity,
     saleUnit,
     unitsPerPack,
@@ -206,6 +227,122 @@ function normalizeInvoiceItems(payload) {
   });
 }
 
+const PACK_SALE_PATTERN = /^(PACK|PACKS|STRIP|STRIPS|BOX|BOXES|BOTTLE|BOTTLES|PIECE|PIECES|UNIT|UNITS)$/;
+
+/**
+ * Read inventory snapshots and calculate every line total. `allowedInactiveIds`
+ * lets an invoice edit keep lines whose batch was archived after the sale.
+ */
+function prepareInvoiceLines(lines, { allowedInactiveIds = new Set() } = {}) {
+  const prepared = lines.map((line) => {
+    const inventory = fetchInventoryById(line.inventoryItemId);
+
+    if (!inventory) {
+      throw notFoundError('One of the medicines is no longer in inventory');
+    }
+
+    const isInactive = !inventory.isActive || !inventory.productIsActive;
+    if (isInactive && !allowedInactiveIds.has(inventory.inventoryItemId)) {
+      throw conflictError(`${inventory.name} is no longer available for sale`);
+    }
+
+    const unitsPerPack = Math.max(
+      1,
+      Number(line.unitsPerPack) || Number(inventory.unitsPerPack) || 1
+    );
+    const saleUnit = (line.saleUnit || inventory.unitLabel || 'PACK').toUpperCase();
+    const isPackSale = PACK_SALE_PATTERN.test(saleUnit);
+    const packQuantity = round4(
+      isPackSale ? line.saleQuantity : line.saleQuantity / unitsPerPack
+    );
+
+    if (packQuantity <= 0) {
+      throw validationError(`${inventory.name} quantity must be greater than 0`);
+    }
+
+    if (inventory.stock < packQuantity) {
+      throw conflictError(
+        `${inventory.name} only has ${inventory.stock} pack(s) available. Refresh the bill and try again.`,
+        { inventoryItemId: inventory.inventoryItemId, available: inventory.stock }
+      );
+    }
+
+    const lineSubtotal = round2(line.unitPrice * packQuantity);
+    const discountAmount = round2(lineSubtotal * (line.discountPercent / 100));
+    const lineTotal = round2(lineSubtotal - discountAmount);
+
+    return {
+      line: {
+        ...line,
+        quantity: packQuantity,
+        saleUnit,
+        unitsPerPack,
+        lineSubtotal,
+        discountAmount,
+        lineTotal
+      },
+      inventory
+    };
+  });
+
+  const subtotal = round2(prepared.reduce((sum, entry) => sum + entry.line.lineSubtotal, 0));
+  const totalDiscount = round2(prepared.reduce((sum, entry) => sum + entry.line.discountAmount, 0));
+  const totalGst = round2(prepared.reduce((sum, entry) => {
+    const taxable = entry.line.lineSubtotal - entry.line.discountAmount;
+    return sum + taxable * (entry.line.gstPercent / 100);
+  }, 0));
+  const total = round2(subtotal - totalDiscount + totalGst);
+
+  return { prepared, subtotal, totalDiscount, totalGst, total };
+}
+
+function insertInvoiceLines({
+  invoiceId,
+  invoiceNumber,
+  prepared,
+  createdAt,
+  movementType = 'sale',
+  movementNote = null
+}) {
+  for (const { line, inventory } of prepared) {
+    applyStockMovement({
+      inventoryItemId: inventory.inventoryItemId,
+      delta: -line.quantity,
+      type: movementType,
+      referenceType: 'invoice',
+      referenceId: invoiceId,
+      note: movementNote || `Sale ${invoiceNumber}`
+    });
+
+    const gstAmount = round2(
+      (line.lineSubtotal - line.discountAmount) * (line.gstPercent / 100)
+    );
+
+    statements.insertInvoiceItem.run({
+      invoiceId,
+      productId: inventory.productId,
+      inventoryItemId: inventory.inventoryItemId,
+      nameSnapshot: inventory.name,
+      batchNumberSnapshot: inventory.batchNumber,
+      expiryDateSnapshot: inventory.expiryDate,
+      saltSummarySnapshot: inventory.saltSummary || null,
+      quantity: line.quantity,
+      saleQuantity: line.saleQuantity,
+      saleUnit: line.saleUnit,
+      unitsPerPack: line.unitsPerPack,
+      unitPrice: line.unitPrice,
+      mrpSnapshot: inventory.mrp,
+      discountPercent: line.discountPercent,
+      discountAmount: line.discountAmount,
+      gstPercent: line.gstPercent,
+      gstAmount,
+      lineSubtotal: line.lineSubtotal,
+      lineTotal: round2(line.lineTotal + gstAmount),
+      createdAt
+    });
+  }
+}
+
 export function createSaleInvoice(payload = {}) {
   const customer = payload.customer ?? {};
   const customerName = cleanDisplay(customer.name ?? payload.customerName);
@@ -236,65 +373,8 @@ export function createSaleInvoice(payload = {}) {
 
     // Read the snapshot data before stock changes so the historical line keeps
     // the values that were true at the moment of sale.
-    const prepared = lines.map((line) => {
-      const inventory = fetchInventoryById(line.inventoryItemId);
-
-      if (!inventory) {
-        throw notFoundError('One of the medicines is no longer in inventory');
-      }
-
-      if (!inventory.isActive || !inventory.productIsActive) {
-        throw conflictError(`${inventory.name} is no longer available for sale`);
-      }
-
-      const unitsPerPack = Math.max(
-        1,
-        Number(line.unitsPerPack) || Number(inventory.unitsPerPack) || 1
-      );
-      const saleUnit = (line.saleUnit || inventory.unitLabel || 'PACK').toUpperCase();
-      const isPackSale = /^(PACK|PACKS|STRIP|STRIPS|BOX|BOXES|BOTTLE|BOTTLES|PIECE|PIECES|UNIT|UNITS)$/.test(
-        saleUnit
-      );
-      const packQuantity = round4(
-        isPackSale ? line.saleQuantity : line.saleQuantity / unitsPerPack
-      );
-
-      if (packQuantity <= 0) {
-        throw validationError(`${inventory.name} quantity must be greater than 0`);
-      }
-
-      if (inventory.stock < packQuantity) {
-        throw conflictError(
-          `${inventory.name} only has ${inventory.stock} pack(s) available. Refresh the bill and try again.`,
-          { inventoryItemId: inventory.inventoryItemId, available: inventory.stock }
-        );
-      }
-
-      const lineSubtotal = round2(line.unitPrice * packQuantity);
-      const discountAmount = round2(lineSubtotal * (line.discountPercent / 100));
-      const lineTotal = round2(lineSubtotal - discountAmount);
-
-      return {
-        line: {
-          ...line,
-          quantity: packQuantity,
-          saleUnit,
-          unitsPerPack,
-          lineSubtotal,
-          discountAmount,
-          lineTotal
-        },
-        inventory
-      };
-    });
-
-    const subtotal = round2(prepared.reduce((sum, entry) => sum + entry.line.lineSubtotal, 0));
-    const totalDiscount = round2(prepared.reduce((sum, entry) => sum + entry.line.discountAmount, 0));
-    const totalGst = round2(prepared.reduce((sum, entry) => {
-      const taxable = entry.line.lineSubtotal - entry.line.discountAmount;
-      return sum + taxable * (entry.line.gstPercent / 100);
-    }, 0));
-    const total = round2(subtotal - totalDiscount + totalGst);
+    const { prepared, subtotal, totalDiscount, totalGst, total } =
+      prepareInvoiceLines(lines);
 
     const result = statements.insertInvoice.run({
       invoiceNumber,
@@ -313,43 +393,14 @@ export function createSaleInvoice(payload = {}) {
 
     const invoiceId = Number(result.lastInsertRowid);
 
-    for (const { line, inventory } of prepared) {
-      applyStockMovement({
-        inventoryItemId: inventory.inventoryItemId,
-        delta: -line.quantity,
-        type: 'sale',
-        referenceType: 'invoice',
-        referenceId: invoiceId,
-        note: `Sale ${invoiceNumber}`
-      });
-
-      const gstAmount = round2(
-        (line.lineSubtotal - line.discountAmount) * (line.gstPercent / 100)
-      );
-
-      statements.insertInvoiceItem.run({
-        invoiceId,
-        productId: inventory.productId,
-        inventoryItemId: inventory.inventoryItemId,
-        nameSnapshot: inventory.name,
-        batchNumberSnapshot: inventory.batchNumber,
-        expiryDateSnapshot: inventory.expiryDate,
-        saltSummarySnapshot: inventory.saltSummary || null,
-        quantity: line.quantity,
-        saleQuantity: line.saleQuantity,
-        saleUnit: line.saleUnit,
-        unitsPerPack: line.unitsPerPack,
-        unitPrice: line.unitPrice,
-        mrpSnapshot: inventory.mrp,
-        discountPercent: line.discountPercent,
-        discountAmount: line.discountAmount,
-        gstPercent: line.gstPercent,
-        gstAmount,
-        lineSubtotal: line.lineSubtotal,
-        lineTotal: round2(line.lineTotal + gstAmount),
-        createdAt
-      });
-    }
+    insertInvoiceLines({
+      invoiceId,
+      invoiceNumber,
+      prepared,
+      createdAt,
+      movementType: 'sale',
+      movementNote: `Sale ${invoiceNumber}`
+    });
 
     return { invoice: loadInvoiceById(invoiceId), duplicate: false };
   });
@@ -361,6 +412,10 @@ export function listInvoices({
   date = '',
   customer = '',
   invoice = '',
+  q = '',
+  medicine = '',
+  from = '',
+  to = '',
   limit = 500,
   includeVoided = false
 } = {}) {
@@ -372,29 +427,64 @@ export function listInvoices({
   const invoiceFilter = invoice && String(invoice).trim() !== ''
     ? `%${String(invoice).trim()}%`
     : null;
+  const queryFilter = q && String(q).trim() !== ''
+    ? `%${String(q).trim()}%`
+    : null;
+  const medicineFilter = medicine && String(medicine).trim() !== ''
+    ? `%${String(medicine).trim()}%`
+    : null;
+  const fromFilter = from && String(from).trim() !== '' ? String(from).trim() : null;
+  const toFilter = to && String(to).trim() !== '' ? String(to).trim() : null;
 
   const headers = db.prepare(`
     SELECT *
     FROM invoices
     WHERE (@date IS NULL OR substr(createdAt, 1, 10) = @date)
+      AND (@from IS NULL OR substr(createdAt, 1, 10) >= @from)
+      AND (@to IS NULL OR substr(createdAt, 1, 10) <= @to)
       AND (@customer IS NULL OR customerName LIKE @customer)
       AND (@invoice IS NULL OR invoiceNumber LIKE @invoice)
+      AND (
+        @q IS NULL
+        OR invoiceNumber LIKE @q
+        OR customerName LIKE @q
+        OR customerPhone LIKE @q
+        OR EXISTS (
+          SELECT 1 FROM invoice_items ii
+          WHERE ii.invoiceId = invoices.id
+            AND (ii.nameSnapshot LIKE @q OR ii.batchNumberSnapshot LIKE @q)
+        )
+      )
+      AND (
+        @medicine IS NULL
+        OR EXISTS (
+          SELECT 1 FROM invoice_items ii
+          WHERE ii.invoiceId = invoices.id
+            AND (ii.nameSnapshot LIKE @medicine OR ii.batchNumberSnapshot LIKE @medicine)
+        )
+      )
       AND (@includeVoided = 1 OR status <> 'voided')
     ORDER BY createdAt DESC, id DESC
     LIMIT ${safeLimit}
   `).all({
     date: dateFilter,
+    from: fromFilter,
+    to: toFilter,
     customer: customerFilter,
     invoice: invoiceFilter,
+    q: queryFilter,
+    medicine: medicineFilter,
     includeVoided: includeVoided ? 1 : 0
   });
 
   if (headers.length === 0) return [];
 
   const itemStmt = db.prepare(`
-    SELECT * FROM invoice_items
-    WHERE invoiceId IN (SELECT value FROM json_each(?))
-    ORDER BY invoiceId, id
+    SELECT ii.*, inv.quantity AS liveStock
+    FROM invoice_items ii
+    LEFT JOIN inventory_items inv ON inv.id = ii.inventoryItemId
+    WHERE ii.invoiceId IN (SELECT value FROM json_each(?))
+    ORDER BY ii.invoiceId, ii.id
   `);
 
   let items = [];
@@ -407,9 +497,11 @@ export function listInvoices({
   if (items.length === 0) {
     const placeholders = headers.map(() => '?').join(', ');
     items = db.prepare(`
-      SELECT * FROM invoice_items
-      WHERE invoiceId IN (${placeholders})
-      ORDER BY invoiceId, id
+      SELECT ii.*, inv.quantity AS liveStock
+      FROM invoice_items ii
+      LEFT JOIN inventory_items inv ON inv.id = ii.inventoryItemId
+      WHERE ii.invoiceId IN (${placeholders})
+      ORDER BY ii.invoiceId, ii.id
     `).all(...headers.map((header) => header.id));
   }
 
@@ -424,6 +516,124 @@ export function listInvoices({
 
 export function getSaleInvoice(id) {
   return loadInvoiceById(id);
+}
+
+/**
+ * Edit a finalized sale.
+ *
+ * The old lines are returned to stock first, then the edited lines are priced,
+ * validated and deducted in the same transaction. If anything fails (for
+ * example the edited quantity is no longer available), the whole edit rolls
+ * back and the original invoice and stock are untouched.
+ */
+export function updateSaleInvoice(id, payload = {}) {
+  const invoiceId = Number(id);
+
+  if (!Number.isSafeInteger(invoiceId) || invoiceId <= 0) {
+    throw validationError('Invalid invoice id');
+  }
+
+  const transaction = db.transaction(() => {
+    const invoice = statements.invoiceById.get(invoiceId);
+
+    if (!invoice) {
+      throw notFoundError('Invoice not found');
+    }
+    if (invoice.status === 'voided') {
+      throw conflictError('This invoice has been voided and cannot be edited.');
+    }
+    if (invoice.stockDeducted !== 1 || invoice.legacyRecord === 1) {
+      throw conflictError('This legacy invoice cannot be edited because it never deducted stock.');
+    }
+
+    const existingItems = statements.itemsByInvoice.all(invoiceId);
+
+    // Return the original quantities before validating the edited lines so the
+    // invoice can reuse the stock it already took.
+    for (const item of existingItems) {
+      if (!item.inventoryItemId) continue;
+      applyStockMovement({
+        inventoryItemId: item.inventoryItemId,
+        delta: item.quantity,
+        type: 'sale_edit',
+        referenceType: 'invoice',
+        referenceId: invoiceId,
+        note: `Invoice ${invoice.invoiceNumber} edited (restore)`
+      });
+    }
+
+    const customer = payload.customer ?? {};
+    const hasCustomerName =
+      payload.customerName !== undefined || customer.name !== undefined;
+    const customerName = hasCustomerName
+      ? cleanDisplay(customer.name ?? payload.customerName)
+      : invoice.customerName;
+
+    if (!customerName) {
+      throw validationError('Customer name is required');
+    }
+
+    const hasPhone = payload.customerPhone !== undefined || customer.phone !== undefined;
+    const customerPhone = hasPhone
+      ? cleanDisplay(customer.phone ?? payload.customerPhone) || null
+      : invoice.customerPhone;
+
+    const hasAddress =
+      payload.customerAddress !== undefined || customer.address !== undefined;
+    const customerAddress = hasAddress
+      ? cleanDisplay(customer.address ?? payload.customerAddress) || null
+      : invoice.customerAddress;
+
+    const requestedStatus = cleanDisplay(payload.status).toLowerCase();
+    const status =
+      requestedStatus === 'pending'
+        ? 'pending'
+        : requestedStatus === 'completed'
+          ? 'completed'
+          : invoice.status;
+
+    const prescriptionJson = Object.prototype.hasOwnProperty.call(payload, 'prescription')
+      ? serializePrescription(payload.prescription)
+      : invoice.prescriptionJson;
+
+    const lines = normalizeInvoiceItems(payload);
+    const allowedInactiveIds = new Set(
+      existingItems
+        .map((item) => item.inventoryItemId)
+        .filter((inventoryItemId) => Number.isSafeInteger(Number(inventoryItemId)))
+    );
+
+    const { prepared, subtotal, totalDiscount, totalGst, total } =
+      prepareInvoiceLines(lines, { allowedInactiveIds });
+
+    statements.updateInvoice.run({
+      id: invoiceId,
+      customerName,
+      customerPhone,
+      customerAddress,
+      subtotal,
+      totalDiscount,
+      totalGst,
+      total,
+      status,
+      prescriptionJson
+    });
+
+    statements.deleteInvoiceItems.run(invoiceId);
+
+    insertInvoiceLines({
+      invoiceId,
+      invoiceNumber: invoice.invoiceNumber,
+      prepared,
+      createdAt: new Date().toISOString(),
+      movementType: 'sale_edit',
+      movementNote: `Invoice ${invoice.invoiceNumber} edited`
+    });
+
+    return loadInvoiceById(invoiceId);
+  });
+
+  return transaction.immediate();
 }
 
 export function voidSaleInvoice(id) {

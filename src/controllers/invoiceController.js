@@ -10,6 +10,7 @@ import {
   deleteSaleInvoice,
   getSaleInvoice,
   listInvoices,
+  updateSaleInvoice,
   voidSaleInvoice
 } from '../services/salesInvoiceService.js';
 
@@ -38,8 +39,8 @@ export const saveInvoice = (req, res) => {
 
 export const getInvoicesByDateAndCustomer = (req, res) => {
   try {
-    const { date = '', customer = '', invoice = '', limit = 500 } = req.query;
-    res.json(listInvoices({ date, customer, invoice, limit }));
+    const { date = '', customer = '', invoice = '', q = '', medicine = '', from = '', to = '', limit = 500 } = req.query;
+    res.json(listInvoices({ date, customer, invoice, q, medicine, from, to, limit }));
   } catch (error) {
     console.error('Error fetching invoices:', error);
     sendError(res, error, 'Error fetching invoices');
@@ -77,6 +78,21 @@ export const deleteInvoice = (req, res) => {
   } catch (error) {
     console.error('Error deleting invoice:', error);
     sendError(res, error, 'Error deleting invoice');
+  }
+};
+
+export const updateInvoice = (req, res) => {
+  try {
+    const invoice = updateSaleInvoice(req.params.id, req.body);
+
+    res.json({
+      success: true,
+      message: 'Invoice updated successfully',
+      invoice
+    });
+  } catch (error) {
+    console.error('Error updating invoice:', error);
+    sendError(res, error, 'Error updating invoice');
   }
 };
 
