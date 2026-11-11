@@ -13,3 +13,7 @@ billsNpayment.db-shm
 billsNpayment.db-wal
 
 .env
+
+# Local HTTPS certificate for phone/LAN access
+certs/
+scripts/create-local-cert.sh

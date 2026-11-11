@@ -12,6 +12,10 @@ import './setup/createLedgerSchema.js'
 import './setup/createSettingsSchema.js'
 
 import express from 'express'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+import https from 'https'
 import supplierRoutes from './routes/supplierRouter.js'
 import billRouterSql from './routes/billRouter.js'
 import paymentRouterSql from './routes/paymentRouter.js'
@@ -56,7 +60,43 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/registers", registerRoutes);
 app.use("/api/backups", backupRoutes);
 
-app.listen(PORT, () => {
+// Serve the built frontend when it exists, so the laptop can act as the single
+// server for phones and other devices on the same network.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const frontendDist = path.resolve(__dirname, '../../MediGo/dist');
+
+if (fs.existsSync(frontendDist)) {
+    app.use(express.static(frontendDist));
+    app.use((req, res, next) => {
+        if (req.method !== 'GET' || req.path.startsWith('/api')) return next();
+        res.sendFile(path.join(frontendDist, 'index.html'));
+    });
+    console.log(`Serving frontend from ${frontendDist}`);
+}
+
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Phone/LAN access: http://<laptop-ip>:${PORT}`);
     startBackupScheduler();
 });
+
+// Optional HTTPS listener for phone camera access. Browsers only allow camera
+// access on HTTPS or localhost, so a phone on the LAN needs this when scanning.
+const certDir = path.resolve('certs');
+const httpsKeyPath = path.join(certDir, 'local.key');
+const httpsCertPath = path.join(certDir, 'local.crt');
+const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 8443;
+
+if (fs.existsSync(httpsKeyPath) && fs.existsSync(httpsCertPath)) {
+    https
+        .createServer(
+            {
+                key: fs.readFileSync(httpsKeyPath),
+                cert: fs.readFileSync(httpsCertPath),
+            },
+            app,
+        )
+        .listen(HTTPS_PORT, '0.0.0.0', () => {
+            console.log(`HTTPS server is running on https://<laptop-ip>:${HTTPS_PORT}`);
+        });
+}
