@@ -172,6 +172,7 @@ function normalizePurchaseLine(product = {}) {
     discount,
     gstPercentage,
     category: cleanDisplay(product.category),
+    manufacturer: cleanDisplay(product.manufacturer ?? product.company),
     supplier: cleanDisplay(product.supplier),
     // undefined keeps the product's existing salt composition; [] clears it.
     salts: product.salts,

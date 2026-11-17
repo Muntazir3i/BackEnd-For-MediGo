@@ -23,6 +23,7 @@ export const INVENTORY_SELECT = `
     i.productId,
     p.name,
     COALESCE(p.category, '') AS category,
+    COALESCE(p.manufacturer, '') AS manufacturer,
     p.drugSchedule,
     i.batchNumber,
     i.expiryDate,
@@ -50,10 +51,10 @@ const statements = {
   productById: db.prepare('SELECT * FROM products WHERE id = ?'),
   insertProduct: db.prepare(`
     INSERT INTO products (
-      name, normalizedName, category, defaultPurchasePrice, defaultMrp,
+      name, normalizedName, category, manufacturer, defaultPurchasePrice, defaultMrp,
       defaultSellingPrice, discount, gstPercentage, isActive
     ) VALUES (
-      @name, @normalizedName, @category, @defaultPurchasePrice, @defaultMrp,
+      @name, @normalizedName, @category, @manufacturer, @defaultPurchasePrice, @defaultMrp,
       @defaultSellingPrice, @discount, @gstPercentage, 1
     )
   `),
@@ -61,6 +62,7 @@ const statements = {
     UPDATE products
     SET name = @name,
         category = CASE WHEN @category IS NULL OR @category = '' THEN category ELSE @category END,
+        manufacturer = CASE WHEN @manufacturer IS NULL OR @manufacturer = '' THEN manufacturer ELSE @manufacturer END,
         defaultPurchasePrice = COALESCE(@defaultPurchasePrice, defaultPurchasePrice),
         defaultMrp = COALESCE(@defaultMrp, defaultMrp),
         defaultSellingPrice = COALESCE(@defaultSellingPrice, defaultSellingPrice),
@@ -78,6 +80,11 @@ const statements = {
   updateProductSchedule: db.prepare(`
     UPDATE products
     SET drugSchedule = @drugSchedule, updatedAt = datetime('now')
+    WHERE id = @id
+  `),
+  updateProductManufacturer: db.prepare(`
+    UPDATE products
+    SET manufacturer = @manufacturer, updatedAt = datetime('now')
     WHERE id = @id
   `),
   inventoryByProductBatch: db.prepare(`
@@ -175,6 +182,7 @@ export function resolveProduct(data = {}) {
 
   const normalizedName = normalizeKey(name);
   const category = cleanDisplay(data.category);
+  const manufacturer = cleanDisplay(data.manufacturer ?? data.company);
   const purchasePrice = toNumberOrNull(data.unitPrice ?? data.purchasePrice);
   const mrp = toNumberOrNull(data.mrp);
   const sellingPrice = toNumberOrNull(data.sellingPrice) ?? mrp;
@@ -188,6 +196,7 @@ export function resolveProduct(data = {}) {
       name,
       normalizedName,
       category,
+      manufacturer,
       defaultPurchasePrice: purchasePrice ?? 0,
       defaultMrp: mrp ?? 0,
       defaultSellingPrice: sellingPrice ?? 0,
@@ -200,6 +209,7 @@ export function resolveProduct(data = {}) {
       id: product.id,
       name,
       category,
+      manufacturer,
       defaultPurchasePrice: purchasePrice,
       defaultMrp: mrp,
       defaultSellingPrice: sellingPrice,
@@ -460,6 +470,7 @@ export function searchInventory(term = '', { limit = 100, includeInactive = fals
     WHERE ${where.join(' AND ')}
       AND (
         p.name LIKE @term
+        OR p.manufacturer LIKE @term
         OR i.batchNumber LIKE @term
         OR EXISTS (
           SELECT 1
@@ -710,6 +721,13 @@ export function updateInventoryItem(id, data = {}) {
       SET category = @category, updatedAt = datetime('now')
       WHERE id = @id
     `).run({ id: productId, category: cleanDisplay(data.category) });
+  }
+
+  if (data.manufacturer !== undefined || data.company !== undefined) {
+    statements.updateProductManufacturer.run({
+      id: productId,
+      manufacturer: cleanDisplay(data.manufacturer ?? data.company) || null
+    });
   }
 
   if (data.drugSchedule !== undefined) {
