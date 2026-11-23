@@ -359,6 +359,20 @@ const statements = {
       AND ps.stockOnHand <= (r.quantity / 3.0) * 1.5
     ORDER BY ((r.quantity / 3.0) - ps.stockOnHand) DESC
     LIMIT 6
+  `),
+  marginRows: db.prepare(`
+    SELECT
+      i.productId,
+      COALESCE(p.name, 'Unnamed medicine') AS name,
+      COALESCE(p.category, '') AS category,
+      COALESCE(p.manufacturer, '') AS manufacturer,
+      i.quantity,
+      i.purchasePrice,
+      i.mrp,
+      i.gstPercentage
+    FROM inventory_items i
+    JOIN products p ON p.id = i.productId
+    WHERE i.isActive = 1 AND p.isActive = 1
   `)
 };
 
@@ -772,6 +786,191 @@ export function getMedicinePriceHistory(req, res) {
     },
     points,
     summary
+  });
+}
+
+const MARGIN_BANDS = [
+  { label: 'Loss', min: -Infinity, max: 0 },
+  { label: '0–5%', min: 0, max: 5 },
+  { label: '5–10%', min: 5, max: 10 },
+  { label: '10–15%', min: 10, max: 15 },
+  { label: '15–20%', min: 15, max: 20 },
+  { label: '20–30%', min: 20, max: 30 },
+  { label: '30%+', min: 30, max: Infinity },
+];
+
+export function getMarginDashboard(req, res) {
+  const rows = statements.marginRows.all();
+  const targetMarginPercent = 10;
+  const products = new Map();
+  let batchCount = 0;
+  let inStockBatchCount = 0;
+
+  for (const row of rows) {
+    batchCount += 1;
+    const quantity = Number(row.quantity) || 0;
+    if (quantity > 0) inStockBatchCount += 1;
+
+    const rate = Number(row.purchasePrice) || 0;
+    const mrp = Number(row.mrp) || 0;
+    const gst = Number(row.gstPercentage) || 0;
+    const unitCost = rate * (1 + gst / 100);
+
+    const key = row.productId ?? `name:${row.name}`;
+    if (!products.has(key)) {
+      products.set(key, {
+        productId: row.productId ?? null,
+        name: row.name || 'Unnamed medicine',
+        category: row.category || 'Uncategorised',
+        manufacturer: row.manufacturer || '',
+        batchCount: 0,
+        stockQuantity: 0,
+        mrpValue: 0,
+        costValue: 0,
+        missingCost: false,
+        missingMrp: false,
+      });
+    }
+
+    const product = products.get(key);
+    product.batchCount += 1;
+    product.stockQuantity += quantity;
+    product.mrpValue += quantity * mrp;
+    product.costValue += quantity * unitCost;
+    if (quantity > 0 && rate <= 0) product.missingCost = true;
+    if (quantity > 0 && mrp <= 0) product.missingMrp = true;
+  }
+
+  const productList = [...products.values()].map((product) => {
+    const mrpValue = round2(product.mrpValue);
+    const costValue = round2(product.costValue);
+    const profit = round2(mrpValue - costValue);
+
+    return {
+      ...product,
+      stockQuantity: round2(product.stockQuantity),
+      mrpValue,
+      costValue,
+      profit,
+      marginPercent: mrpValue > 0 ? round2((profit / mrpValue) * 100) : null,
+    };
+  });
+
+  const stockedProducts = productList.filter(
+    (product) => product.stockQuantity > 0 && product.marginPercent !== null
+  );
+
+  const totalMrpValue = round2(productList.reduce((sum, product) => sum + product.mrpValue, 0));
+  const totalCostValue = round2(productList.reduce((sum, product) => sum + product.costValue, 0));
+  const totalProfit = round2(totalMrpValue - totalCostValue);
+  const averageMarginPercent =
+    totalMrpValue > 0 ? round2((totalProfit / totalMrpValue) * 100) : 0;
+  const simpleAverageMarginPercent = stockedProducts.length
+    ? round2(
+        stockedProducts.reduce((sum, product) => sum + product.marginPercent, 0) /
+          stockedProducts.length
+      )
+    : 0;
+
+  const lossProductCount = stockedProducts.filter((product) => product.marginPercent < 0).length;
+  const belowTargetProductCount = stockedProducts.filter(
+    (product) => product.marginPercent < targetMarginPercent
+  ).length;
+  const missingCostProductCount = stockedProducts.filter((product) => product.missingCost).length;
+  const missingMrpProductCount = stockedProducts.filter((product) => product.missingMrp).length;
+
+  const bands = MARGIN_BANDS.map(({ label }) => ({ label, count: 0, stockValue: 0 }));
+
+  for (const product of stockedProducts) {
+    const index = MARGIN_BANDS.findIndex(
+      (band) => product.marginPercent >= band.min && product.marginPercent < band.max
+    );
+
+    if (index >= 0) {
+      bands[index].count += 1;
+      bands[index].stockValue = round2(bands[index].stockValue + product.mrpValue);
+    }
+  }
+
+  const toSummary = (product) => ({
+    productId: product.productId,
+    name: product.name,
+    category: product.category,
+    manufacturer: product.manufacturer,
+    batchCount: product.batchCount,
+    stockQuantity: product.stockQuantity,
+    stockValue: product.mrpValue,
+    profit: product.profit,
+    marginPercent: product.marginPercent,
+  });
+
+  const topProducts = [...stockedProducts]
+    .sort((a, b) => b.marginPercent - a.marginPercent)
+    .slice(0, 5)
+    .map(toSummary);
+
+  const bottomProducts = [...stockedProducts]
+    .sort((a, b) => a.marginPercent - b.marginPercent)
+    .slice(0, 5)
+    .map(toSummary);
+
+  const categories = new Map();
+
+  for (const product of stockedProducts) {
+    const key = product.category || 'Uncategorised';
+
+    if (!categories.has(key)) {
+      categories.set(key, {
+        name: key,
+        productCount: 0,
+        stockValue: 0,
+        costValue: 0,
+      });
+    }
+
+    const category = categories.get(key);
+    category.productCount += 1;
+    category.stockValue += product.mrpValue;
+    category.costValue += product.costValue;
+  }
+
+  const categorySummary = [...categories.values()]
+    .map((category) => {
+      const stockValue = round2(category.stockValue);
+      const costValue = round2(category.costValue);
+      const profit = round2(stockValue - costValue);
+
+      return {
+        name: category.name,
+        productCount: category.productCount,
+        stockValue,
+        profit,
+        marginPercent: stockValue > 0 ? round2((profit / stockValue) * 100) : 0,
+      };
+    })
+    .sort((a, b) => b.stockValue - a.stockValue)
+    .slice(0, 6);
+
+  res.json({
+    generatedAt: new Date().toISOString(),
+    targetMarginPercent,
+    productCount: productList.length,
+    stockedProductCount: stockedProducts.length,
+    batchCount,
+    inStockBatchCount,
+    totalMrpValue,
+    totalCostValue,
+    totalProfit,
+    averageMarginPercent,
+    simpleAverageMarginPercent,
+    lossProductCount,
+    belowTargetProductCount,
+    missingCostProductCount,
+    missingMrpProductCount,
+    bands,
+    topProducts,
+    bottomProducts,
+    categories: categorySummary,
   });
 }
 
