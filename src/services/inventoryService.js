@@ -502,6 +502,20 @@ export function listInventory({ limit = 100, offset = 0 } = {}) {
   return attachSalts(rows);
 }
 
+export function listCompanyNames() {
+  return db
+    .prepare(`
+      SELECT DISTINCT UPPER(TRIM(manufacturer)) AS name
+      FROM products
+      WHERE isActive = 1
+        AND manufacturer IS NOT NULL
+        AND TRIM(manufacturer) <> ''
+      ORDER BY name COLLATE NOCASE ASC
+    `)
+    .all()
+    .map((row) => row.name);
+}
+
 const STOCK_SUMMARY_SELECT = `
   SELECT
     p.id,

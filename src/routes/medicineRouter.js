@@ -9,6 +9,7 @@ import {
   fetchMedicineById,
   fetchOutOfStockProducts,
   fetchSalts,
+  fetchCompanyNames,
   updateMedicineById
 } from '../controllers/MedicinesControllerSql.js';
 
@@ -78,6 +79,16 @@ router.get('/expiry-stock', (req, res) => {
   } catch (error) {
     console.error('Error fetching expiring stock:', error);
     sendError(res, error, 'Failed to fetch expiring stock');
+  }
+});
+
+// Distinct company names used for purchase-entry suggestions
+router.get('/medicines/companies', (req, res) => {
+  try {
+    res.json(fetchCompanyNames());
+  } catch (error) {
+    console.error('Error fetching company names:', error);
+    sendError(res, error, 'Failed to fetch company names');
   }
 });
 

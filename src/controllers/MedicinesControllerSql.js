@@ -13,6 +13,7 @@ import {
   listInventory,
   listLowStockProducts,
   listOutOfStockProducts,
+  listCompanyNames,
   updateInventoryItem
 } from '../services/inventoryService.js';
 import { findOrCreateSalt, listSalts } from '../services/saltService.js';
@@ -25,6 +26,10 @@ export function fetchAllMedicines() {
 
 export function fetchMedicineById(id) {
   return fetchInventoryById(id);
+}
+
+export function fetchCompanyNames() {
+  return listCompanyNames();
 }
 
 export function updateMedicineById(id, data = {}) {
