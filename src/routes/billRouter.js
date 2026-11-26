@@ -69,8 +69,8 @@ router.delete('/bills/:id', (req, res) => {
 // Route to fetch the supplier list with bill counts and totals.
 router.get('/bills/suppliers', (req, res) => {
   try {
-    const { search, date, invoice } = req.query;
-    res.json(fetchSupplierSummaries({ search, date, invoice }));
+    const { search, date, invoice, batch } = req.query;
+    res.json(fetchSupplierSummaries({ search, date, invoice, batch }));
   } catch (error) {
     console.error('Error fetching bill suppliers:', error);
     sendError(res, error, 'Failed to fetch bill suppliers');
@@ -80,8 +80,8 @@ router.get('/bills/suppliers', (req, res) => {
 // Route to fetch a page of bills with their line-item snapshots.
 router.get('/bills', (req, res) => {
   try {
-    const { limit, offset, supplierName, supplierSearch, date, invoice } = req.query;
-    res.json(fetchBillsWithProducts({ limit, offset, supplierName, supplierSearch, date, invoice }));
+    const { limit, offset, supplierName, supplierSearch, date, invoice, batch } = req.query;
+    res.json(fetchBillsWithProducts({ limit, offset, supplierName, supplierSearch, date, invoice, batch }));
   } catch (error) {
     console.error('Error fetching bills:', error);
     sendError(res, error, 'Failed to fetch bills');

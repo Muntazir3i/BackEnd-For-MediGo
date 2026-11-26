@@ -78,6 +78,14 @@ const statements = {
       AND (@supplierSearch IS NULL OR supplierName LIKE @supplierSearch)
       AND (@date IS NULL OR date LIKE @date)
       AND (@invoice IS NULL OR invoice LIKE @invoice)
+      AND (
+        @batch IS NULL
+        OR EXISTS (
+          SELECT 1 FROM purchase_items pi
+          WHERE pi.purchaseBillId = purchase_bills.id
+            AND pi.batchNumberSnapshot LIKE @batch
+        )
+      )
   `),
   pageBills: db.prepare(`
     SELECT *
@@ -87,6 +95,14 @@ const statements = {
       AND (@supplierSearch IS NULL OR supplierName LIKE @supplierSearch)
       AND (@date IS NULL OR date LIKE @date)
       AND (@invoice IS NULL OR invoice LIKE @invoice)
+      AND (
+        @batch IS NULL
+        OR EXISTS (
+          SELECT 1 FROM purchase_items pi
+          WHERE pi.purchaseBillId = purchase_bills.id
+            AND pi.batchNumberSnapshot LIKE @batch
+        )
+      )
     ORDER BY date DESC, id DESC
     LIMIT @limit OFFSET @offset
   `),
@@ -102,6 +118,14 @@ const statements = {
       AND (@search IS NULL OR supplierName LIKE @search)
       AND (@date IS NULL OR date LIKE @date)
       AND (@invoice IS NULL OR invoice LIKE @invoice)
+      AND (
+        @batch IS NULL
+        OR EXISTS (
+          SELECT 1 FROM purchase_items pi
+          WHERE pi.purchaseBillId = purchase_bills.id
+            AND pi.batchNumberSnapshot LIKE @batch
+        )
+      )
     GROUP BY supplierName
     ORDER BY supplierName COLLATE NOCASE ASC
   `),
@@ -474,7 +498,8 @@ export function fetchBillsWithProducts({
   supplierName = '',
   supplierSearch = '',
   date = '',
-  invoice = ''
+  invoice = '',
+  batch = ''
 } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || DEFAULT_BILL_PAGE_SIZE, 1), 100);
   const safeOffset = Math.max(Number(offset) || 0, 0);
@@ -490,12 +515,16 @@ export function fetchBillsWithProducts({
   const invoiceFilter = invoice && invoice.trim() !== ''
     ? `%${invoice.trim()}%`
     : null;
+  const batchFilter = batch && batch.trim() !== ''
+    ? `%${batch.trim()}%`
+    : null;
 
   const params = {
     supplier,
     supplierSearch: supplierLike,
     date: dateFilter,
-    invoice: invoiceFilter
+    invoice: invoiceFilter,
+    batch: batchFilter
   };
 
   const { total } = statements.countBills.get(params);
@@ -531,8 +560,11 @@ export function fetchSupplierSummaries(filters = {}) {
   const invoice = options.invoice && options.invoice.trim() !== ''
     ? `%${options.invoice.trim()}%`
     : null;
+  const batch = options.batch && options.batch.trim() !== ''
+    ? `%${options.batch.trim()}%`
+    : null;
 
-  return statements.supplierSummaries.all({ search, date, invoice });
+  return statements.supplierSummaries.all({ search, date, invoice, batch });
 }
 
 /**
